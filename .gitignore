@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# 环境配置（含 API Key，绝不提交）
+.env
+
+# 测试与工具产物
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 会话历史数据（可能含用户对话内容，绝不提交）
+data/
+
+# IDE
+.vscode/
+.idea/
