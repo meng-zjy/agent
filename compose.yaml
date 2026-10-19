@@ -1,0 +1,25 @@
+services:
+  agent:
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    # 仅让宿主机（和 Tailscale Serve）访问；绝不把 8000 直接暴露给公网。
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # 会话、日志、知识库都在此目录。容器重建不会丢数据。
+      - ./data:/app/data
+    stop_grace_period: 40s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

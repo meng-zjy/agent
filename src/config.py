@@ -1,5 +1,6 @@
 """应用配置：从环境变量 / .env 文件读取。"""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -95,9 +96,16 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
 
     # MCP（M5）
+    # 本地学习时可开启；公网/多人环境应关闭，或替换为经过权限审计的专用工具。
+    mcp_enabled: bool = True
     mcp_server_command: str = "npx"
     mcp_server_args: str = "-y @modelcontextprotocol/server-filesystem"
     mcp_allowed_dir: str = "data/mcp_workspace"
+
+    # 多模态输入（M6）。图片以 base64 data URI 随请求进入内存和上游模型，
+    # 所以服务端必须设边界，不能只依赖浏览器的 file input。
+    max_images_per_message: int = Field(default=3, ge=0, le=10)
+    max_image_bytes: int = Field(default=3 * 1024 * 1024, ge=1, le=20 * 1024 * 1024)
 
     # 访问控制（M9，默认关闭）
     # ⚠ 留空 = 完全关闭，行为与未安装完全一致。本项目跑在 127.0.0.1，

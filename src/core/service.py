@@ -7,6 +7,9 @@ CLI（现在）与 Web（未来）都只调这一个入口，不直接碰 Agent 
 同一会话同时来两条消息时不会互相覆盖历史，而是排队；等不及则报 SessionBusyError。
 """
 
+import base64
+import binascii
+import re
 import threading
 import time
 import uuid
@@ -29,6 +32,10 @@ NOW_HINT = """[当前时间]
 历史对话里出现过的时间可能是几天前的旧答案，不要照抄。"""
 
 _WEEKDAY = "一二三四五六日"
+_IMAGE_DATA_URI = re.compile(
+    r"\Adata:image/(jpeg|png|webp|gif);base64,([A-Za-z0-9+/]+={0,2})\Z",
+    re.IGNORECASE,
+)
 
 
 def format_now(now: datetime | None = None) -> str:
@@ -64,6 +71,21 @@ class InputTooLongError(ValueError):
         )
 
 
+class InvalidImageError(ValueError):
+    """图片数量、格式或解码后大小不符合服务端边界。"""
+
+
+def _matches_image_signature(image_format: str, content: bytes) -> bool:
+    """核验常见图片格式的文件头，拒绝伪造 MIME 的任意 base64 内容。"""
+    signatures = {
+        "jpeg": content.startswith(b"\xff\xd8\xff"),
+        "png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+        "gif": content.startswith((b"GIF87a", b"GIF89a")),
+        "webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
+    }
+    return signatures[image_format.lower()]
+
+
 # 摘要提示词：强调"保留关键事实、丢弃寒暄、控制长度"
 SUMMARY_PROMPT = """\
 你是一个对话摘要器。下面给你一段已有摘要和一段新的对话历史。
@@ -90,6 +112,8 @@ class ChatService:
         max_turns: int = 20,
         max_chars: int = 10000,
         max_input_chars: int = 32000,
+        max_images_per_message: int = 3,
+        max_image_bytes: int = 3 * 1024 * 1024,
         summary_keep_turns: int = 20,
         summary_max_chars: int = 1500,
         inject_now: bool = True,
@@ -102,6 +126,8 @@ class ChatService:
         self._max_turns = max_turns
         self._max_chars = max_chars
         self._max_input_chars = max_input_chars
+        self._max_images_per_message = max_images_per_message
+        self._max_image_bytes = max_image_bytes
         self._summary_keep_turns = summary_keep_turns
         self._summary_max_chars = summary_max_chars
         self._inject_now = inject_now
@@ -224,6 +250,7 @@ class ChatService:
         try:
             self._log.info("请求开始 输入=%d字", len(text))
             self.validate_input(text)
+            self.validate_images(images)
             if not self._acquire(session_id, timeout=self._busy_timeout):
                 self._log.warning("会话忙被拒（等%.0fs超时）", self._busy_timeout)
                 raise SessionBusyError(session_id)
@@ -258,6 +285,43 @@ class ChatService:
             self._log.warning("输入被拒 长度=%d 上限=%d", len(text), self._max_input_chars)
             raise InputTooLongError(len(text), self._max_input_chars)
 
+    def validate_images(self, images: list[str] | None) -> None:
+        """校验 Web 多模态图片的数量、data URI 类型和解码后大小。
+
+        图片不会落盘，但会先进入应用内存、再作为请求体发送给模型。此处是权威
+        边界：前端的 ``accept`` 属性和文件大小提示只为改善体验，不能当作防护。
+        """
+        if not images:
+            return
+        if len(images) > self._max_images_per_message:
+            raise InvalidImageError(
+                f"单条消息最多上传 {self._max_images_per_message} 张图片"
+            )
+
+        maximum_base64_chars = 4 * ((self._max_image_bytes + 2) // 3)
+        for image in images:
+            match = _IMAGE_DATA_URI.fullmatch(image)
+            if match is None:
+                raise InvalidImageError(
+                    "图片格式无效：仅支持 JPEG、PNG、WebP 或 GIF 的 base64 data URI"
+                )
+            image_format = match.group(1)
+            encoded = match.group(2)
+            if len(encoded) > maximum_base64_chars:
+                raise InvalidImageError(
+                    f"单张图片不能超过 {self._max_image_bytes // (1024 * 1024)} MiB"
+                )
+            try:
+                decoded = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise InvalidImageError("图片 base64 数据无效") from exc
+            if len(decoded) > self._max_image_bytes:
+                raise InvalidImageError(
+                    f"单张图片不能超过 {self._max_image_bytes // (1024 * 1024)} MiB"
+                )
+            if not _matches_image_signature(image_format, decoded):
+                raise InvalidImageError("图片内容与声明的格式不匹配")
+
     @property
     def max_input_chars(self) -> int:
         """当前生效的输入上限。
@@ -267,6 +331,16 @@ class ChatService:
         报出错的数，前端据此设的 maxLength 就和服务端不一致了。
         """
         return self._max_input_chars
+
+    @property
+    def max_images_per_message(self) -> int:
+        """当前服务端允许的单条消息图片数，供 Web 做即时反馈。"""
+        return self._max_images_per_message
+
+    @property
+    def max_image_bytes(self) -> int:
+        """当前服务端允许的单张图片字节数，供 Web 做即时反馈。"""
+        return self._max_image_bytes
 
     def upstream_state(self) -> dict:
         """上游（LLM 服务商）的熔断状态，供 `/health` 报出。

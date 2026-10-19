@@ -30,6 +30,7 @@ def _settings(**overrides):
         deadline=30.0,
         breaker_failure_threshold=3,
         breaker_open_seconds=30.0,
+        mcp_enabled=True,
     )
     d.update(overrides)
     return types.SimpleNamespace(**d)
@@ -109,3 +110,9 @@ def test_provider_label_reads_config_only(monkeypatch):
 def test_provider_label_for_sensenova(monkeypatch):
     monkeypatch.setattr(boot, "settings", _settings(llm_provider="sensenova"))
     assert boot.provider_label() == "sensenova/sensenova-6.8-flash-lite"
+
+
+def test_build_mcp_tools_respects_explicit_disable(monkeypatch):
+    """生产配置关闭 MCP 时，不能启动 npx 或创建授权目录。"""
+    monkeypatch.setattr(boot, "settings", _settings(mcp_enabled=False))
+    assert boot.build_mcp_tools() == []

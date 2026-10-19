@@ -5,6 +5,8 @@
 > 📖 **第一次看这个项目？** 先读 [docs/12_项目总览.md](docs/12_项目总览.md) —— 架构分层、一条消息的完整时序图、状态图、代码地图、17 条设计决策、扩展指南。不用翻前面 11 份文档。
 >
 > ⚠️ **换供应商记录**：2026-10-09 起默认供应商从商汤日日新换成 **DeepSeek**，`docs/01`~`docs/11` 里的实测数字都是换之前的。空回复和「不能真流式」这两个问题现在都已经解决了 —— 详见 [docs/14_DeepSeek接入.md](docs/14_DeepSeek接入.md)。
+>
+> 🚀 **服务器封闭 Beta**：已提供 Ubuntu 26.04 的 Docker + Tailscale 私有部署方案。无需域名、不开放应用端口，按 [docs/17_封闭Beta部署.md](docs/17_封闭Beta部署.md) 操作。
 
 - **模型**：DeepSeek `deepseek-chat`（OpenAI 协议兼容；可在 `.env` 里换成 `sensenova-6.8-flash-lite` 切回商汤）
 - **M1**：命令行多轮对话 + 流式输出
@@ -114,6 +116,7 @@ AI：抱歉，我不知道你叫什么——这是一个新的会话。
 - **运行方式**：MCP 服务器经 `npx` 启动（需 Node.js），首次会下载；启动时自动连接并注册工具
 - **安全**：filesystem 只授权 `data/mcp_workspace/` 目录，模型无法读写目录外
 - **降级**：没装 Node 或 MCP 服务器启动失败时，自动降级为无 MCP 工具，聊天照常
+- **部署开关**：`MCP_ENABLED=false` 可显式关闭 MCP；封闭 Beta 部署模板默认关闭，避免模型触发服务器端文件读写
 - **扩展预留**：MCP 工具和计算器/检索一样，都是注册进 `ToolRegistry` 的普通工具，循环/记忆/Web 一行没改
 
 ## 多模态说明（M6）
@@ -169,6 +172,9 @@ AI：抱歉，我不知道你叫什么——这是一个新的会话。
 | `MCP_SERVER_COMMAND` | MCP 服务器启动命令       | `npx`                              |
 | `MCP_SERVER_ARGS`    | MCP 服务器参数           | `-y @modelcontextprotocol/server-filesystem` |
 | `MCP_ALLOWED_DIR`    | filesystem 授权目录      | `data/mcp_workspace`             |
+| `MCP_ENABLED`        | 是否连接 MCP 工具；服务器封闭 Beta 建议关闭 | `true` |
+| `MAX_IMAGES_PER_MESSAGE` | 单条消息的图片数量上限（服务端校验） | `3` |
+| `MAX_IMAGE_BYTES`    | 单张图片解码后的字节上限（服务端校验） | `3145728`（3 MiB） |
 | `REQUEST_TIMEOUT`    | HTTP read 超时秒数（SDK 默认 600，太宽松） | `90`                       |
 | `MAX_RETRIES`        | 重试次数。SDK 自带重试已在代码里关掉，只留这一份 | `3`                         |
 | `DEADLINE`           | 一次调用（**含所有重试**）的墙钟上限，read 按剩余预算收窄 | `30`                        |
@@ -190,8 +196,11 @@ pytest
 Agent_test/
 ├── README.md                  # 本文件
 ├── .env.example               # 配置模板（占位符）
+├── .env.production.example    # Docker 封闭 Beta 配置模板（不含真实 Key）
 ├── .env                       # 真实配置（gitignore 忽略）
 ├── .gitignore
+├── Dockerfile                 # 单 worker、非 root 的应用镜像
+├── compose.yaml               # 仅绑定宿主机回环地址的容器编排
 ├── requirements.txt           # 依赖清单
 ├── pytest.ini
 ├── docs/
@@ -210,7 +219,8 @@ Agent_test/
 │   ├── 13_安全加固.md           # M9 request_id 全链路关联 + 输入侧边界 + 两个探针（含负面结论）
 │   ├── 14_DeepSeek接入.md       # 换供应商记录：空回复 / 流式两个问题的复测结论（2026-10-09）
 │   ├── 15_调用可靠性.md         # 总时间预算 + 熔断器：上游挂掉时不再拖死线程池和探活（2026-10-11）
-│   └── 16_流式工具循环.md       # 工具循环改真流式：工具参数按 index 分段拼接 + 首字 2.75s→1.20s（2026-10-15）
+│   ├── 16_流式工具循环.md       # 工具循环改真流式：工具参数按 index 分段拼接 + 首字 2.75s→1.20s（2026-10-15）
+│   └── 17_封闭Beta部署.md       # Ubuntu 26.04 + Docker + Tailscale 私有部署
 ├── data/
 │   ├── sessions/              # 会话历史 JSON（含 summary，gitignore 忽略）
 │   └── knowledge/             # 知识库文档（.txt/.md，gitignore 忽略）

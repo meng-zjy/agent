@@ -18,6 +18,9 @@ _ENV_KEYS = (
     "SENSENOVA_MODEL",
     "MAX_TOKENS",
     "TEMPERATURE",
+    "MCP_ENABLED",
+    "MAX_IMAGES_PER_MESSAGE",
+    "MAX_IMAGE_BYTES",
 )
 
 
@@ -40,6 +43,9 @@ def test_defaults():
     assert s.sensenova_model == "sensenova-6.8-flash-lite"
     assert s.max_tokens is None
     assert s.temperature is None
+    assert s.mcp_enabled is True
+    assert s.max_images_per_message == 3
+    assert s.max_image_bytes == 3 * 1024 * 1024
 
 
 def test_env_override(monkeypatch):
@@ -47,12 +53,16 @@ def test_env_override(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-key")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-test-model")
     monkeypatch.setenv("MAX_TOKENS", "512")
+    monkeypatch.setenv("MCP_ENABLED", "false")
+    monkeypatch.setenv("MAX_IMAGES_PER_MESSAGE", "2")
 
     s = Settings(_env_file=None)
     assert s.llm_provider == "deepseek"
     assert s.deepseek_api_key == "sk-test-key"
     assert s.deepseek_model == "deepseek-test-model"
     assert s.max_tokens == 512
+    assert s.mcp_enabled is False
+    assert s.max_images_per_message == 2
 
 
 def test_env_file_parsing(tmp_path):

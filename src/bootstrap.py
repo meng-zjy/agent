@@ -80,7 +80,15 @@ def build_retriever():
 
 
 def build_mcp_tools():
-    """连接 MCP 服务器并包装其工具；失败/超时返回空列表（降级为无 MCP）。"""
+    """连接 MCP 服务器并包装其工具；关闭、失败或超时时返回空列表。
+
+    文件系统 MCP 含写入副作用。生产部署由 ``MCP_ENABLED=false`` 显式关闭，
+    防止模型输出或外部资料间接触发服务器端文件操作。
+    """
+    if not settings.mcp_enabled:
+        get_logger("bootstrap").info("MCP 已由 MCP_ENABLED=false 关闭")
+        return []
+
     try:
         from src.core.mcp import McpToolBridge, wrap_mcp_tools
 
@@ -154,6 +162,8 @@ def build_service(retriever=None) -> ChatService:
         max_turns=settings.max_history_turns,
         max_chars=settings.max_history_chars,
         max_input_chars=settings.max_input_chars,
+        max_images_per_message=settings.max_images_per_message,
+        max_image_bytes=settings.max_image_bytes,
         summary_keep_turns=settings.summary_keep_turns,
         summary_max_chars=settings.summary_max_chars,
     )

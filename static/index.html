@@ -74,6 +74,8 @@
     // 单次输入上限。启动时从 /health 读后端的真实值——服务端才是那道边界
     // （CLI 和直接 curl 也走它），前端这一层只是即时反馈，别各写一份。
     let MAX_INPUT = null;
+    let MAX_IMAGES = null;
+    let MAX_IMAGE_BYTES = null;
 
     function applyInputLimit() {
       if (MAX_INPUT == null) return;
@@ -102,8 +104,30 @@
       d.textContent = t || '';
       return d.innerHTML;
     }
+
+    // 模型、RAG 和 MCP 都会产生不可信文本。marked 不负责过滤 HTML 或
+    // javascript: 链接，因此只保留 Markdown 的文字格式和 http(s)/mailto 链接。
+    // 用户上传的图片由独立的受控路径渲染，模型 Markdown 不允许再嵌图片。
+    const markdownRenderer = window.marked ? new marked.Renderer() : null;
+    if (markdownRenderer) {
+      markdownRenderer.html = () => '';
+      markdownRenderer.image = (_href, _title, text) => text;
+      markdownRenderer.link = (href, _title, text) => {
+        try {
+          const url = new URL(href, window.location.origin);
+          if (!['http:', 'https:', 'mailto:'].includes(url.protocol)) return text;
+          return '<a href="' + escapeHtml(url.href) + '" target="_blank"'
+            + ' rel="noopener noreferrer" referrerpolicy="no-referrer">' + text + '</a>';
+        } catch (e) {
+          return text;
+        }
+      };
+    }
+
     function renderAssistant(t) {
-      return window.marked ? marked.parse(t || '') : escapeHtml(t);
+      return markdownRenderer
+        ? marked.parse(t || '', { renderer: markdownRenderer })
+        : escapeHtml(t);
     }
     // 把非 2xx 响应读成一句人能看懂的话（后端 409 时 detail 就是"会话正在生成回复"）
     async function readError(resp) {
@@ -367,6 +391,18 @@
     $('#file-input').addEventListener('change', async (e) => {
       for (const file of e.target.files) {
         try {
+          if (MAX_IMAGES != null && pendingImages.length >= MAX_IMAGES) {
+            alert('单条消息最多上传 ' + MAX_IMAGES + ' 张图片');
+            break;
+          }
+          if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+            alert('仅支持 JPEG、PNG、WebP 或 GIF 图片');
+            continue;
+          }
+          if (MAX_IMAGE_BYTES != null && file.size > MAX_IMAGE_BYTES) {
+            alert('单张图片不能超过 ' + Math.floor(MAX_IMAGE_BYTES / 1024 / 1024) + ' MiB');
+            continue;
+          }
           const dataUri = await fileToDataUri(file);
           pendingImages.push(dataUri);
           const img = document.createElement('img');
@@ -382,6 +418,8 @@
       try {
         const h = await (await fetch('/health')).json();
         if (h.max_input_chars) MAX_INPUT = h.max_input_chars;
+        if (h.max_images_per_message != null) MAX_IMAGES = h.max_images_per_message;
+        if (h.max_image_bytes) MAX_IMAGE_BYTES = h.max_image_bytes;
       } catch (e) { /* 拿不到就不限制，服务端仍会挡 */ }
       applyInputLimit();
 

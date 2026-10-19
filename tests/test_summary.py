@@ -329,7 +329,13 @@ def test_multi_image_messages_do_not_break_summary(store: MemoryStore):
     service = make_service(store, provider, summary_keep_turns=1)
 
     session = store.create()
-    list(service.send(session.id, "这是什么", images=["data:image/png;base64,AAA"]))
+    # 1×1 PNG。图片现在经过服务端 data URI 校验，不能再用无效的占位 base64。
+    tiny_png = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4"
+        "z8DwHwAFgAI/ScL1NwAAAABJRU5ErkJggg=="
+    )
+    list(service.send(session.id, "这是什么", images=[tiny_png]))
     list(service.send(session.id, "第2轮"))
     list(service.send(session.id, "第3轮"))
 

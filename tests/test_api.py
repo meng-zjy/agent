@@ -1,5 +1,6 @@
 """API 层测试（Web 化）：用假 provider，不花额度、不加载 BGE 模型。"""
 
+import base64
 from collections.abc import Iterator
 
 from fastapi.testclient import TestClient
@@ -28,11 +29,12 @@ class FakeProvider(BaseProvider):
         return Completion(finish_reason="stop", content=self._reply)
 
 
-def make_client(tmp_path) -> TestClient:
+def make_client(tmp_path, **service_options) -> TestClient:
     service = ChatService(
         ChatAgent(FakeProvider()),
         MemoryStore(tmp_path),
         system_prompt="你是助手",
+        **service_options,
     )
     return TestClient(create_app(service))
 
@@ -123,6 +125,52 @@ def test_send_message_persists(tmp_path):
     assert len(messages) == 2
     assert messages[0]["role"] == "user"
     assert messages[1]["role"] == "assistant"
+
+
+def test_send_message_rejects_unsupported_image_type(tmp_path):
+    """服务端不接受 SVG 等可嵌入脚本的图片类型，不能只靠浏览器 accept 属性。"""
+    client = make_client(tmp_path)
+    sid = client.post("/api/sessions").json()["id"]
+    r = client.post(
+        f"/api/sessions/{sid}/messages",
+        json={"text": "看图", "images": ["data:image/svg+xml;base64,PHN2Zz4="]},
+    )
+    assert r.status_code == 400
+    assert "仅支持" in r.json()["detail"]
+
+
+def test_send_message_rejects_oversized_decoded_image(tmp_path):
+    """限制按解码后字节算，不能被 base64 长度或伪造 MIME 绕过。"""
+    client = make_client(tmp_path, max_image_bytes=8)
+    sid = client.post("/api/sessions").json()["id"]
+    encoded = base64.b64encode(b"too-large").decode()
+    r = client.post(
+        f"/api/sessions/{sid}/messages",
+        json={"text": "看图", "images": [f"data:image/png;base64,{encoded}"]},
+    )
+    assert r.status_code == 400
+    assert "不能超过" in r.json()["detail"]
+
+
+def test_send_message_rejects_forged_image_mime_type(tmp_path):
+    """data URI 自称 PNG 但内容不是 PNG 时，不能进入模型请求。"""
+    client = make_client(tmp_path)
+    sid = client.post("/api/sessions").json()["id"]
+    encoded = base64.b64encode(b"not a png").decode()
+    r = client.post(
+        f"/api/sessions/{sid}/messages",
+        json={"text": "看图", "images": [f"data:image/png;base64,{encoded}"]},
+    )
+    assert r.status_code == 400
+    assert "不匹配" in r.json()["detail"]
+
+
+def test_health_reports_image_limits_from_service(tmp_path):
+    client = make_client(tmp_path, max_images_per_message=2, max_image_bytes=1234)
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["max_images_per_message"] == 2
+    assert health.json()["max_image_bytes"] == 1234
 
 
 def test_clear_session(tmp_path):

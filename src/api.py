@@ -15,7 +15,12 @@ from pydantic import BaseModel
 
 from src.config import settings
 from src.core.agent import AgentStatus
-from src.core.service import ChatService, InputTooLongError, SessionBusyError
+from src.core.service import (
+    ChatService,
+    InputTooLongError,
+    InvalidImageError,
+    SessionBusyError,
+)
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 _STATIC_INDEX = _STATIC_DIR / "index.html"
@@ -85,6 +90,11 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         否则会被 send() 生成器里的 except 吞成 SSE 错误事件，拿不到状态码。"""
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
+    @app.exception_handler(InvalidImageError)
+    async def _invalid_image_handler(request: Request, exc: InvalidImageError) -> JSONResponse:
+        """不合规图片与超长文本一样，在建立 SSE 流之前返回明确的 400。"""
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
     def _require(session_id: str) -> None:
         if service.get_session(session_id) is None:
             raise HTTPException(status_code=404, detail="会话不存在")
@@ -113,6 +123,8 @@ def create_app(service: ChatService | None = None) -> FastAPI:
             # 读 service 而不是 settings：真实边界在 service 里，
             # settings 只是它的默认来源（见 ChatService.max_input_chars）
             "max_input_chars": service.max_input_chars,
+            "max_images_per_message": service.max_images_per_message,
+            "max_image_bytes": service.max_image_bytes,
             # 熔断状态：上游挂了时这里会变 "open"，看监控的人一眼就能定位
             # 是「我们自己的服务」还是「上游」的问题
             "upstream": service.upstream_state(),
@@ -137,6 +149,7 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         # 预检查必须在 StreamingResponse 返回之前——send() 是生成器，函数体要到
         # 被迭代时才执行，那时抛异常只会被下面的 except 吞成 SSE 错误事件。
         service.validate_input(body.text)
+        service.validate_images(body.images)
 
         def stream():
             try:
