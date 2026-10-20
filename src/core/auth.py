@@ -29,6 +29,8 @@ class AuthStore:
     """认证数据的唯一所有者；不读取或修改 JSON 对话内容。"""
 
     def __init__(self, database_path: str | Path, invite_code: str, session_hours: int = 168) -> None:
+        if not invite_code:
+            raise ValueError("启用账户体系时必须设置 REGISTRATION_INVITE_CODE")
         self._path = Path(database_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._invite_code = invite_code
