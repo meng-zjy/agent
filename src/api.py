@@ -8,7 +8,7 @@ import json
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -21,6 +21,7 @@ from src.core.service import (
     InvalidImageError,
     SessionBusyError,
 )
+from src.core.auth import AuthError, AuthStore, User
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 _STATIC_INDEX = _STATIC_DIR / "index.html"
@@ -29,6 +30,12 @@ _STATIC_INDEX = _STATIC_DIR / "index.html"
 class SendBody(BaseModel):
     text: str
     images: list[str] | None = None
+
+
+class Credentials(BaseModel):
+    username: str
+    password: str
+    invite_code: str = ""
 
 
 # 速率限制（M9）：每 IP 一个滑动窗口计数。内存态，多进程部署各算各的（见 docs/13 §10）。
@@ -56,6 +63,9 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         from src.bootstrap import build_retriever, build_service
         service = build_service(build_retriever())
 
+    auth_store = None
+    if settings.account_enabled:
+        auth_store = AuthStore(settings.auth_database, settings.registration_invite_code, settings.auth_session_hours)
     app = FastAPI(title="Agent")
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
@@ -69,6 +79,9 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         """
         if request.url.path == "/health":
             return await call_next(request)
+        if auth_store and request.url.path.startswith("/api/") and not request.url.path.startswith("/api/auth/"):
+            if auth_store.user_for_token(request.cookies.get("agent_session")) is None:
+                return JSONResponse({"detail": "请先登录"}, status_code=401)
         if settings.auth_token and request.headers.get("X-Agent-Token") != settings.auth_token:
             return JSONResponse(
                 {"detail": "认证失败：缺少或错误的 X-Agent-Token"}, status_code=401,
@@ -95,9 +108,53 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         """不合规图片与超长文本一样，在建立 SSE 流之前返回明确的 400。"""
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    def _require(session_id: str) -> None:
-        if service.get_session(session_id) is None:
+    def _current_user(request: Request) -> User | None:
+        return auth_store.user_for_token(request.cookies.get("agent_session")) if auth_store else None
+
+    def _require(session_id: str, user: User | None) -> None:
+        if service.get_session(session_id) is None or (auth_store and not auth_store.owns(user.id, session_id)):
             raise HTTPException(status_code=404, detail="会话不存在")
+
+    @app.get("/api/auth/me")
+    def me(request: Request):
+        user = _current_user(request)
+        return {"enabled": bool(auth_store), "user": {"id": user.id, "username": user.username} if user else None}
+
+    def _login_response(user: User, token: str) -> JSONResponse:
+        response = JSONResponse({"id": user.id, "username": user.username})
+        response.set_cookie("agent_session", token, httponly=True, secure=True, samesite="lax", max_age=settings.auth_session_hours * 3600)
+        return response
+
+    @app.post("/api/auth/register")
+    def register(body: Credentials):
+        if not auth_store:
+            raise HTTPException(status_code=404, detail="账户功能未启用")
+        try:
+            user, token = auth_store.register(body.username, body.password, body.invite_code)
+        except AuthError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # 老版本没有所有权表。首位注册者是服务器所有者，才可安全认领这些旧 JSON 会话。
+        if auth_store.user_count() == 1:
+            auth_store.claim_unowned(user.id, [session.id for session in service.list_sessions()])
+        return _login_response(user, token)
+
+    @app.post("/api/auth/login")
+    def login(body: Credentials):
+        if not auth_store:
+            raise HTTPException(status_code=404, detail="账户功能未启用")
+        try:
+            user, token = auth_store.login(body.username, body.password)
+        except AuthError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        return _login_response(user, token)
+
+    @app.post("/api/auth/logout")
+    def logout(request: Request):
+        if auth_store:
+            auth_store.logout(request.cookies.get("agent_session"))
+        response = JSONResponse({"ok": True})
+        response.delete_cookie("agent_session")
+        return response
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -131,21 +188,29 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         }
 
     @app.get("/api/sessions")
-    def list_sessions():
-        return [s.to_dict() for s in service.list_sessions()]
+    def list_sessions(request: Request):
+        user = _current_user(request)
+        sessions = service.list_sessions()
+        if auth_store:
+            owned = auth_store.owned_ids(user.id)
+            sessions = [session for session in sessions if session.id in owned]
+        return [s.to_dict() for s in sessions]
 
     @app.post("/api/sessions")
-    def create_session():
-        return service.new_session().to_dict()
+    def create_session(request: Request):
+        session = service.new_session()
+        if auth_store:
+            auth_store.own(_current_user(request).id, session.id)
+        return session.to_dict()
 
     @app.get("/api/sessions/{session_id}")
-    def get_session(session_id: str):
-        _require(session_id)
+    def get_session(session_id: str, request: Request):
+        _require(session_id, _current_user(request))
         return service.get_session(session_id).to_dict()
 
     @app.post("/api/sessions/{session_id}/messages")
-    def send_message(session_id: str, body: SendBody):
-        _require(session_id)
+    def send_message(session_id: str, body: SendBody, request: Request):
+        _require(session_id, _current_user(request))
         # 预检查必须在 StreamingResponse 返回之前——send() 是生成器，函数体要到
         # 被迭代时才执行，那时抛异常只会被下面的 except 吞成 SSE 错误事件。
         service.validate_input(body.text)
@@ -166,14 +231,14 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream")
 
     @app.post("/api/sessions/{session_id}/clear")
-    def clear_session(session_id: str):
-        _require(session_id)
+    def clear_session(session_id: str, request: Request):
+        _require(session_id, _current_user(request))
         service.clear_session(session_id)
         return service.get_session(session_id).to_dict()
 
     @app.delete("/api/sessions/{session_id}")
-    def delete_session(session_id: str):
-        _require(session_id)
+    def delete_session(session_id: str, request: Request):
+        _require(session_id, _current_user(request))
         service.delete_session(session_id)
         return {"ok": True}
 

@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     #    本地没有攻击面，这两项只是把中间件的写法掌握住——不是真防护。
     # 认证令牌：非空时所有请求必须带 `X-Agent-Token: <值>`；/health 除外
     auth_token: str = ""
+    account_enabled: bool = False
+    registration_invite_code: str = ""
+    auth_database: str = "data/auth.db"
+    auth_session_hours: int = 168
     # 速率限制：每 IP 每分钟最多多少请求，0 = 关闭
     rate_limit_rpm: int = 0
 

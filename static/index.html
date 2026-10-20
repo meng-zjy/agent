@@ -43,10 +43,28 @@
     #count.over { color: #e5484d; font-weight: 600; }
     #send-btn { margin-left: 4px; padding: 10px 18px; border: none; border-radius: 8px; background: #10a37f; color: #fff; cursor: pointer; min-width: 92px; }
     #send-btn:disabled { background: #b5d9cd; cursor: not-allowed; }
+    #auth-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: #f5f6f8; z-index: 10; }
+    #auth-card { width: min(360px, calc(100vw - 32px)); padding: 28px; background: #fff; border: 1px solid #e2e4e8; border-radius: 12px; box-shadow: 0 10px 35px #0001; }
+    #auth-card h2 { margin-bottom: 18px; font-size: 20px; }
+    #auth-card input { width: 100%; margin: 6px 0; padding: 10px; border: 1px solid #d0d3d8; border-radius: 7px; }
+    #auth-card button { width: 100%; margin-top: 10px; padding: 10px; border: none; border-radius: 7px; background: #10a37f; color: #fff; cursor: pointer; }
+    #auth-switch, #auth-error { margin-top: 12px; font-size: 13px; color: #666; }
+    #auth-switch { cursor: pointer; color: #0d8a6a; }
+    #auth-error { color: #d33; min-height: 18px; }
   </style>
   <script src="/static/marked.min.js"></script>
 </head>
 <body>
+  <div id="auth-overlay">
+    <form id="auth-card">
+      <h2 id="auth-title">登录 Agent</h2>
+      <input id="auth-username" placeholder="用户名" autocomplete="username" required>
+      <input id="auth-password" type="password" placeholder="密码（至少 10 位）" autocomplete="current-password" required>
+      <input id="auth-invite" type="password" placeholder="邀请码" autocomplete="off" hidden>
+      <button id="auth-submit" type="submit">登录</button>
+      <div id="auth-error"></div><div id="auth-switch">没有账号？注册</div>
+    </form>
+  </div>
   <aside class="sidebar">
     <h1>Agent</h1>
     <button id="new-btn">＋ 新建会话</button>
@@ -67,6 +85,7 @@
 
   <script>
     let currentSessionId = null;
+    let registering = false;
     let pendingImages = [];
     const views = new Map();        // 会话id -> 该会话的视图 <div>（切窗口不销毁）
     const generating = new Set();   // 本窗口正在生成回复的会话id
@@ -98,6 +117,17 @@
     const $ = (sel) => document.querySelector(sel);
     const messagesEl = $('#messages');
     const listEl = $('#session-list');
+
+    function showAuth() { $('#auth-overlay').style.display = 'flex'; }
+    function hideAuth() { $('#auth-overlay').style.display = 'none'; }
+    function setAuthMode(register) {
+      registering = register;
+      $('#auth-title').textContent = register ? '注册 Agent' : '登录 Agent';
+      $('#auth-submit').textContent = register ? '注册并登录' : '登录';
+      $('#auth-invite').hidden = !register;
+      $('#auth-switch').textContent = register ? '已有账号？登录' : '没有账号？注册';
+      $('#auth-error').textContent = '';
+    }
 
     function escapeHtml(t) {
       const d = document.createElement('div');
@@ -378,6 +408,18 @@
     });
     $('#input').addEventListener('input', () => { updateCount(); refreshComposer(); });
     $('#new-btn').onclick = newSession;
+    $('#auth-switch').onclick = () => setAuthMode(!registering);
+    $('#auth-card').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = { username: $('#auth-username').value, password: $('#auth-password').value };
+      if (registering) body.invite_code = $('#auth-invite').value;
+      const resp = await fetch('/api/auth/' + (registering ? 'register' : 'login'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!resp.ok) { $('#auth-error').textContent = await readError(resp); return; }
+      hideAuth();
+      await initializeSessions();
+    });
 
     function fileToDataUri(file) {
       return new Promise((resolve, reject) => {
@@ -413,7 +455,7 @@
       e.target.value = '';
     });
 
-    (async function init() {
+    async function initializeSessions() {
       // 先问后端真实的输入上限，再决定 maxLength
       try {
         const h = await (await fetch('/health')).json();
@@ -426,6 +468,11 @@
       const sessions = await (await fetch('/api/sessions')).json();
       if (sessions.length) await selectSession(sessions[0].id);
       else await newSession();
+    }
+    (async function init() {
+      const account = await (await fetch('/api/auth/me')).json();
+      if (account.enabled && !account.user) { showAuth(); return; }
+      await initializeSessions();
     })();
 
     // 别的窗口新建/删除会话时，侧栏也能看到（只刷新列表，不碰正在显示的历史）

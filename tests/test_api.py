@@ -5,6 +5,8 @@ from collections.abc import Iterator
 
 from fastapi.testclient import TestClient
 
+from src.config import settings
+
 from src.api import create_app
 from src.core.agent import ChatAgent
 from src.core.memory import MemoryStore
@@ -187,6 +189,35 @@ def test_delete_session(tmp_path):
     r = client.delete(f"/api/sessions/{sid}")
     assert r.status_code == 200
     assert client.get(f"/api/sessions/{sid}").status_code == 404
+
+
+def test_accounts_require_invite_and_isolate_sessions(tmp_path, monkeypatch):
+    """所有权必须在服务端检查，第二个用户不能探测或读取第一个用户的会话。"""
+    monkeypatch.setattr(settings, "account_enabled", True)
+    monkeypatch.setattr(settings, "registration_invite_code", "test-invite-code")
+    monkeypatch.setattr(settings, "auth_database", str(tmp_path / "auth.db"))
+    service = ChatService(ChatAgent(FakeProvider()), MemoryStore(tmp_path / "sessions"))
+    app = create_app(service)
+    anonymous = TestClient(app, base_url="https://testserver")
+    assert anonymous.get("/api/sessions").status_code == 401
+
+    alice = TestClient(app, base_url="https://testserver")
+    wrong = alice.post("/api/auth/register", json={
+        "username": "alice", "password": "password-123", "invite_code": "wrong",
+    })
+    assert wrong.status_code == 400
+    assert alice.post("/api/auth/register", json={
+        "username": "alice", "password": "password-123", "invite_code": "test-invite-code",
+    }).status_code == 200
+    session_id = alice.post("/api/sessions").json()["id"]
+
+    bob = TestClient(app, base_url="https://testserver")
+    assert bob.post("/api/auth/register", json={
+        "username": "bob", "password": "password-456", "invite_code": "test-invite-code",
+    }).status_code == 200
+    assert bob.get("/api/sessions").json() == []
+    assert bob.get(f"/api/sessions/{session_id}").status_code == 404
+    assert bob.delete(f"/api/sessions/{session_id}").status_code == 404
 
 
 # ---------------------------------------------------------------------------

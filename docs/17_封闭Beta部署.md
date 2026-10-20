@@ -107,6 +107,17 @@ TIME_ZONE=Asia/Shanghai
 
 `TIME_ZONE` 是网页询问“现在几点 / 今天几号 / 星期几”时的权威时区。服务端会直接返回该时区的时间，不再将这类结果交给模型改写；宿主机仍应保持 NTP 时间同步。
 
+启用 M10 多用户封闭 Beta 时，额外在 `.env` 设置并妥善保管邀请码：
+
+```dotenv
+ACCOUNT_ENABLED=true
+REGISTRATION_INVITE_CODE=使用密码管理器生成的长随机口令
+AUTH_DATABASE=/app/data/auth.db
+AUTH_SESSION_HOURS=168
+```
+
+升级后的**第一位注册用户**会认领旧会话，所以应由服务器所有者先注册。邀请码、`auth.db` 与 API Key 都属于敏感数据，不能提交 Git 或发到聊天中；升级前先备份 `data/`。
+
 如果 Docker Hub 在服务器网络中无法拉取 Python 镜像，模板已配置 `PYTHON_IMAGE` 使用镜像代理。
 它仅影响 Docker 构建，不会传入 Agent。不要删除该行；如果将来服务器能稳定直连 Docker Hub，
 可改回 `python:3.12-slim`。

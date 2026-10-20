@@ -183,6 +183,8 @@ AI：抱歉，我不知道你叫什么——这是一个新的会话。
 | `BREAKER_OPEN_SECONDS`| 熔断打开多久后自动试探恢复 | `30`                        |
 | `MAX_INPUT_CHARS`    | 单次输入上限（字符），服务端校验；超长返回 400 | `32000`                  |
 | `AUTH_TOKEN`         | 认证令牌。**留空 = 完全关闭**（默认），非空时请求须带 `X-Agent-Token` | （空） |
+| `ACCOUNT_ENABLED`    | 启用邀请码注册、Cookie 登录与会话隔离 | `false` |
+| `REGISTRATION_INVITE_CODE` | 注册邀请码（仅服务器 `.env`） | （空） |
 | `RATE_LIMIT_RPM`     | 每 IP 每分钟请求上限。**`0` = 完全关闭**（默认） | `0`                    |
 
 ## 运行测试
