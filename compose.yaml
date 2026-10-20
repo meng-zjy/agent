@@ -2,6 +2,9 @@ services:
   agent:
     build:
       context: .
+      args:
+        # 未设置时沿用 Dockerfile 的官方镜像；封闭 Beta 模板在 .env 中配置镜像代理。
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
     restart: unless-stopped
     init: true
     env_file:

@@ -94,6 +94,10 @@ SESSION_DIR=/app/data/sessions
 LOG_DIR=/app/data/logs
 ```
 
+如果 Docker Hub 在服务器网络中无法拉取 Python 镜像，模板已配置 `PYTHON_IMAGE` 使用镜像代理。
+它仅影响 Docker 构建，不会传入 Agent。不要删除该行；如果将来服务器能稳定直连 Docker Hub，
+可改回 `python:3.12-slim`。
+
 为非 root 容器进程创建可写数据目录，然后构建并启动：
 
 ```bash

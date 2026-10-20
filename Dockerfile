@@ -1,5 +1,7 @@
 # 单进程镜像：JSON 会话存储目前只保证单进程内的并发正确性，不能增加 workers。
-FROM python:3.12-slim
+# 服务器可通过 compose 的 PYTHON_IMAGE 构建参数指定可访问的镜像代理；本地默认仍走官方镜像。
+ARG PYTHON_IMAGE=python:3.12-slim
+FROM ${PYTHON_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
