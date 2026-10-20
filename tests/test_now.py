@@ -14,6 +14,9 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from datetime import datetime
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -85,7 +88,7 @@ def test_now_block_is_regenerated_each_turn(monkeypatch, store: MemoryStore):
     写死在 system_prompt 里的那份跑一晚上就过期了——所以必须在 _build_context 里按轮生成。
     """
     ticks = iter(["2026-09-16 星期三 21:14:00", "2026-09-23 星期三 10:26:00"])
-    monkeypatch.setattr("src.core.service.format_now", lambda: next(ticks))
+    monkeypatch.setattr("src.core.service.format_now", lambda **_: next(ticks))
 
     service = make_service(store)
     session = store.create()
@@ -130,6 +133,49 @@ def test_now_not_persisted_to_history(store: MemoryStore):
     loaded = store.load(session.id)
     assert not any("[当前时间]" in m.content for m in loaded.conversation.messages)
     assert [m.role for m in loaded.conversation.messages] == [Role.USER, Role.ASSISTANT]
+
+
+def test_exact_time_question_bypasses_model_and_persists_answer(store: MemoryStore):
+    """纯报时由服务端处理，模型不可用时也不能给用户编造一个时间。"""
+    service = make_service(store)
+    session = store.create()
+    fixed_now = datetime(2026, 10, 20, 12, 34, 56, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    with patch("src.core.service.datetime") as mocked_datetime:
+        mocked_datetime.now.return_value = fixed_now
+        reply = "".join(service.send(session.id, "现在几点？"))
+
+    assert reply == "现在是 12:34:56（中国标准时间）。"
+    loaded = store.load(session.id)
+    assert loaded.conversation.messages[-1].content == reply
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("今天几号", "今天是 2026年10月20日 星期二。"),
+        ("今天星期几？", "今天是星期二。"),
+        ("晚上七点提醒我", None),
+    ],
+)
+def test_deterministic_time_matching_is_narrow(
+    store: MemoryStore, question: str, expected: str | None,
+):
+    """只有无歧义短问句绕过模型，含时间的正常对话必须保持原行为。"""
+    service = make_service(store)
+    fixed_now = datetime(2026, 10, 20, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    with patch("src.core.service.datetime") as mocked_datetime:
+        mocked_datetime.now.return_value = fixed_now
+        reply = service._deterministic_time_reply(question)
+
+    assert reply == expected
+
+
+def test_invalid_time_zone_fails_fast(store: MemoryStore):
+    """拼错时区时启动即报错，不能悄悄退回 UTC 导致线上时间错误。"""
+    with pytest.raises(ValueError, match="无效时区"):
+        make_service(store, time_zone="Not/A-Timezone")
 
 
 # ---------------------------------------------------------------------------

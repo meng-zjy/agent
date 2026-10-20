@@ -74,7 +74,17 @@ docker --version
 docker compose version
 ```
 
-不要用系统仓库里可能过旧的 `docker.io` 替代官方 Engine；也不要为了省事用 root 运行后续 Docker 命令。
+优先使用官方 Engine。若服务器到 Docker 官方仓库的 GPG Key / 软件源网络不稳定，Ubuntu 26.04 的系统包是可用降级方案（本项目已实测 Docker 29.1.3、Compose 2.40.3）：
+
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-v2
+sudo systemctl enable --now docker
+docker --version
+docker compose version
+```
+
+生产环境建议建立普通部署用户并加入 `docker` 组；本次封闭 Beta 以 root 维护时，仍须限制 SSH 登录并妥善保管密钥。
 
 ## 4. 部署 Agent
 
@@ -92,7 +102,10 @@ nano .env
 MCP_ENABLED=false
 SESSION_DIR=/app/data/sessions
 LOG_DIR=/app/data/logs
+TIME_ZONE=Asia/Shanghai
 ```
+
+`TIME_ZONE` 是网页询问“现在几点 / 今天几号 / 星期几”时的权威时区。服务端会直接返回该时区的时间，不再将这类结果交给模型改写；宿主机仍应保持 NTP 时间同步。
 
 如果 Docker Hub 在服务器网络中无法拉取 Python 镜像，模板已配置 `PYTHON_IMAGE` 使用镜像代理。
 它仅影响 Docker 构建，不会传入 Agent。不要删除该行；如果将来服务器能稳定直连 Docker Hub，
@@ -171,3 +184,89 @@ docker compose ps
 - 不支持多人账户、会话归属或审计；受邀 Tailscale 用户看到的是同一个 Agent 数据目录。
 - 不支持多 worker 或多台机器共享会话；要扩容前应迁移到数据库并实现跨进程锁。
 - 不适合向陌生公网用户开放。公开前需要域名/HTTPS、真实登录、按用户隔离数据、反向代理限流、备份与监控，并重新评审 MCP、RAG 和图片输入。
+
+## 9. 阿里云 Ubuntu 26.04 实际部署记录（2026-10-20）
+
+本节记录这次环境中实际遇到的网络与时区问题。它们不是每台机器都必然出现；只有遇到同类现象时再按对应小节处理。所有命令都在服务器上执行。
+
+### 9.1 GitHub HTTPS 克隆被中断
+
+现象是 `GnuTLS recv error (-110)`、`TLS connection was non-properly terminated` 或 `git pull` 超时。先让 Git 使用 HTTP/1.1，再做一次浅克隆：
+
+```bash
+git config --global http.version HTTP/1.1
+git clone --depth 1 <你的仓库HTTPS地址> ~/agent
+```
+
+网络偶发失败时直接重试 `git pull --ff-only` 即可；不要为此关闭 TLS 校验，也不要在命令中写入 Token。
+
+### 9.2 Docker Hub 能拉小镜像、但拉不到 Python 基础镜像
+
+本次服务器的阿里云 Docker 镜像加速地址可以拉到 `hello-world`，却对 `python:3.12-slim` 返回 `not found`。项目因此把基础镜像地址参数化，并在生产模板中固定为已经验证可用的：
+
+```dotenv
+PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.12-slim
+```
+
+先单独验证，再构建应用：
+
+```bash
+docker pull docker.m.daocloud.io/library/python:3.12-slim
+docker compose up -d --build
+```
+
+该镜像代理是网络兼容方案，不是业务依赖；将来 Docker Hub 直连稳定后可将 `PYTHON_IMAGE` 改回官方 `python:3.12-slim`。
+
+### 9.3 Tailscale Serve 的 HTTPS 证书未签发
+
+`tailscale serve status` 已显示代理，但浏览器或 `curl` TLS 握手失败时，先看日志：
+
+```bash
+journalctl -u tailscaled --since "15 minutes ago" --no-pager | tail -n 100
+```
+
+若日志包含 `acme-v02.api.letsencrypt.org` 的 DNS 超时，说明 Tailscale 无法通过 ACME 申请证书。先确认系统可解析该域名：
+
+```bash
+tailscale set --accept-dns=false
+resolvectl dns eth0 223.5.5.5 223.6.6.6
+resolvectl flush-caches
+resolvectl query acme-v02.api.letsencrypt.org
+```
+
+`eth0` 必须替换为 `resolvectl status` 中实际承载默认路由的网卡名。解析恢复后重建 Serve 配置：
+
+```bash
+tailscale serve --https=443 off
+tailscale serve --bg --https=443 http://127.0.0.1:8000
+tailscale serve status
+```
+
+Tailscale 会异步申请证书。必要时可用 Tailscale IP 验证完整链路（把三个占位符替换为 `tailscale serve status` 的主机名和 `tailscale status` 的 IP）：
+
+```bash
+curl -vk --resolve <主机名>.ts.net:443:<Tailscale-IP> https://<主机名>.ts.net/
+```
+
+拿到 `HTTP/2 200` 且证书颁发者为 Let's Encrypt 后，使用同一 Tailnet 内、已登录 Tailscale 的电脑在浏览器访问该 HTTPS 地址。不要把该地址当作公网网站；`tailscale serve` 默认仅 Tailnet 可见。
+
+### 9.4 时间与时区验收
+
+宿主机的时钟必须由 NTP 同步，应用的 `TIME_ZONE` 则决定中文报时所用的时区。两者分别验证：
+
+```bash
+timedatectl set-timezone Asia/Shanghai
+timedatectl set-ntp true
+date
+date -u
+timedatectl status
+docker compose exec agent date
+```
+
+期望结果：宿主机和容器的本地时间均为 `CST (+0800)`，UTC 比本地慢 8 小时，`System clock synchronized: yes`。应用从本版本起会将“现在几点 / 今天几号 / 今天星期几”直接按 `TIME_ZONE` 返回，不再交由模型自由生成；因此升级后可在网页新建会话验证一次。
+
+### 9.5 本次环境的最终验收结果
+
+以下项目均已完成：Docker 容器 `healthy`、`/health` 返回 `ok: true`、应用端口仅绑定 `127.0.0.1:8000`、Tailscale Serve 的 HTTPS 证书已签发、Tailnet 内浏览器能打开网页、宿主机与容器的 NTP/中国时区一致。
+
+API Key 曾出现在本地编辑器/聊天上下文时，应当按“已泄露”处理：去模型供应商控制台撤销旧 Key、创建新 Key、更新 `~/agent/.env`，再执行 `docker compose up -d --force-recreate`。Key 绝不能提交到 Git 仓库、文档或日志。

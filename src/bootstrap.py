@@ -164,6 +164,7 @@ def build_service(retriever=None) -> ChatService:
         max_input_chars=settings.max_input_chars,
         max_images_per_message=settings.max_images_per_message,
         max_image_bytes=settings.max_image_bytes,
+        time_zone=settings.time_zone,
         summary_keep_turns=settings.summary_keep_turns,
         summary_max_chars=settings.summary_max_chars,
     )

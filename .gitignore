@@ -16,6 +16,7 @@ build/
 # 测试与工具产物
 .pytest_cache/
 .pytest-basetemp/
+.pytest-tmp-*/
 .coverage
 htmlcov/
 

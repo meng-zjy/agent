@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.core.agent import AgentStatus, ChatAgent
 from src.core.logger import get_logger, reset_request_context, set_request_context
@@ -37,10 +38,25 @@ _IMAGE_DATA_URI = re.compile(
     re.IGNORECASE,
 )
 
+# 只处理「单独询问当前时间」的短句。带上下文的聊天（如「晚上七点提醒我」）
+# 仍应交给模型理解，不能因为含有「几点」就绕过正常对话。
+_TIME_ONLY_REQUEST = re.compile(
+    r"^(?:请问|麻烦(?:你)?|能(?:告诉)?我|告诉我)?(?:现在|当前|这会儿)?"
+    r"(?:是)?(?:几点(?:了)?|时间(?:是)?(?:多少|几点))[？?！!。]*$"
+)
+_DATE_ONLY_REQUEST = re.compile(
+    r"^(?:请问|麻烦(?:你)?|能(?:告诉)?我|告诉我)?(?:今天|现在|当前)"
+    r"(?:是)?(?:几号|几月几日|日期(?:是)?(?:多少)?)[？?！!。]*$"
+)
+_WEEKDAY_ONLY_REQUEST = re.compile(
+    r"^(?:请问|麻烦(?:你)?|能(?:告诉)?我|告诉我)?(?:今天|现在|当前)"
+    r"(?:是)?(?:星期几|周几)[？?！!。]*$"
+)
 
-def format_now(now: datetime | None = None) -> str:
+
+def format_now(now: datetime | None = None, *, time_zone: ZoneInfo | None = None) -> str:
     """把当前时间格式化成中文可读的一行，如 `2026-09-23 星期三 10:30:00`。"""
-    now = now or datetime.now()
+    now = now or datetime.now(time_zone or ZoneInfo("Asia/Shanghai"))
     return f"{now:%Y-%m-%d} 星期{_WEEKDAY[now.weekday()]} {now:%H:%M:%S}"
 
 
@@ -117,6 +133,7 @@ class ChatService:
         summary_keep_turns: int = 20,
         summary_max_chars: int = 1500,
         inject_now: bool = True,
+        time_zone: str = "Asia/Shanghai",
         busy_timeout: float = 30.0,
         housekeeping_timeout: float = 5.0,
     ) -> None:
@@ -131,6 +148,10 @@ class ChatService:
         self._summary_keep_turns = summary_keep_turns
         self._summary_max_chars = summary_max_chars
         self._inject_now = inject_now
+        try:
+            self._time_zone = ZoneInfo(time_zone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"无效时区：{time_zone}") from exc
         self._busy_timeout = busy_timeout
         self._housekeeping_timeout = housekeeping_timeout
 
@@ -358,15 +379,22 @@ class ChatService:
 
         conv = session.conversation
         conv.add(Role.USER, text, images=images)   # 1. 记录用户问题（可带图片）
-        context = self._build_context(session)   # 2. 组装要发给模型的上下文
-        reply = ""
+        reply = self._deterministic_time_reply(text)
         try:
-            for chunk in self._agent.respond(context):
-                if isinstance(chunk, AgentStatus):
-                    yield chunk                  # 进度提示原样透传，不进 reply
-                    continue
-                reply += chunk                   # 只累积正文——历史里不能出现「正在计算…」
-                yield chunk                      # 3. 流式转发给调用方
+            if reply is not None:
+                # 当前时间由服务器时钟决定，不能把最终表述再交给模型随机生成。
+                # 仍走同一套持久化与 SSE 流，CLI/Web 的行为保持一致。
+                self._log.info("确定性时间回复")
+                yield reply
+            else:
+                context = self._build_context(session)   # 2. 组装要发给模型的上下文
+                reply = ""
+                for chunk in self._agent.respond(context):
+                    if isinstance(chunk, AgentStatus):
+                        yield chunk              # 进度提示原样透传，不进 reply
+                        continue
+                    reply += chunk               # 历史里不能出现「正在计算…」
+                    yield chunk                  # 3. 流式转发给调用方
         except GeneratorExit:
             self._log.warning("请求撤回（客户端断开，本轮不落盘）")
             conv.messages.pop()                  # 用户中途打断（如 Ctrl+C）：撤回本轮消息
@@ -384,6 +412,18 @@ class ChatService:
             self._maybe_summarize(session)       # 6. 长对话：把更早的消息压成摘要
         finally:
             self._memory.save(session)           # 7. 无论成败都落盘（save 会刷新 updated_at）
+
+    def _deterministic_time_reply(self, text: str) -> str | None:
+        """为无歧义的报时问题直接返回服务器时间，避免模型复读或臆测。"""
+        normalized = re.sub(r"\s+", "", text)
+        now = datetime.now(self._time_zone)
+        if _TIME_ONLY_REQUEST.fullmatch(normalized):
+            return f"现在是 {now:%H:%M:%S}（中国标准时间）。"
+        if _DATE_ONLY_REQUEST.fullmatch(normalized):
+            return f"今天是 {now:%Y年%m月%d日} 星期{_WEEKDAY[now.weekday()]}。"
+        if _WEEKDAY_ONLY_REQUEST.fullmatch(normalized):
+            return f"今天是星期{_WEEKDAY[now.weekday()]}。"
+        return None
 
     # ---------- 内部：组装上下文（历史压缩/截断的扩展点） ----------
 
@@ -403,7 +443,10 @@ class ChatService:
         if self._system_prompt:
             prefix.append(Message(role=Role.SYSTEM, content=self._system_prompt))
         if self._inject_now:
-            prefix.append(Message(role=Role.SYSTEM, content=NOW_HINT.format(now=format_now())))
+            prefix.append(Message(
+                role=Role.SYSTEM,
+                content=NOW_HINT.format(now=format_now(time_zone=self._time_zone)),
+            ))
         if session.summary:
             prefix.append(Message(role=Role.SYSTEM, content=f"[对话历史摘要]\n{session.summary}"))
         return prefix + self._trim(list(session.conversation.messages))

@@ -11,7 +11,7 @@
 - **模型**：DeepSeek `deepseek-chat`（OpenAI 协议兼容；可在 `.env` 里换成 `sensenova-6.8-flash-lite` 切回商汤）
 - **M1**：命令行多轮对话 + 流式输出
 - **M2**：会话历史 / 多轮上下文 + 多会话管理 + **JSON 持久化（重启不丢）**
-- **M3**：工具调用（ReAct 循环 + 原生 Function Calling，内置计算器 / 查时间）
+- **M3**：工具调用（ReAct 循环 + 原生 Function Calling，内置计算器 / 查时间）；精确报时由服务端确定性返回
 - **M4**：RAG 知识库（文档检索增强回答，本地 BGE 中文向量化）
 - **Web**：浏览器聊天界面（FastAPI + SSE，复用同一 ChatService）
 - **M5**：MCP 接入（标准协议接外部工具，内置 filesystem 服务器）
@@ -160,6 +160,7 @@ AI：抱歉，我不知道你叫什么——这是一个新的会话。
 | `TEMPERATURE`        | 可选，采样温度           | 不设置则用模型默认                  |
 | `SESSION_DIR`        | 会话历史存放目录         | `data/sessions`                  |
 | `SYSTEM_PROMPT`      | 系统提示词（角色设定）   | 内置默认中文助手人设                |
+| `TIME_ZONE`          | 精确报时使用的 IANA 时区 | `Asia/Shanghai`                    |
 | `MAX_HISTORY_TURNS`  | 历史截断：最多保留几轮   | `20`                               |
 | `MAX_HISTORY_CHARS`  | 历史截断：最多多少字符   | `10000`                            |
 | `SUMMARY_KEEP_TURNS` | 摘要：保留最近几轮原文，更早的压成摘要（`0` = 关闭摘要） | `20` |

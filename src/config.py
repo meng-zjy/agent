@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     )
     max_history_turns: int = 20
     max_history_chars: int = 10000
+    # 服务器对中国用户的默认时区。纯报时问题由 ChatService 直接按此时区回答，
+    # 不依赖 Docker 镜像或宿主机的本地时区设置。
+    time_zone: str = "Asia/Shanghai"
     # 单次输入上限（M9）：挡住"把整个文档粘进聊天框"烧 token / 撑爆上下文
     # 要处理长文档，请放进 data/knowledge/ 走 RAG 检索，不要塞进聊天框
     max_input_chars: int = 32000
