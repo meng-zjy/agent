@@ -12,6 +12,9 @@
     #new-btn { margin: 0 12px 12px; padding: 8px; border: none; border-radius: 6px; background: #10a37f; color: #fff; cursor: pointer; font-size: 13px; }
     #new-btn:hover { background: #0d8a6a; }
     #session-list { list-style: none; overflow-y: auto; flex: 1; }
+    #account-panel { padding: 14px; border-top: 1px solid #e2e4e8; }
+    #account-name { display: block; margin-bottom: 8px; overflow-wrap: anywhere; font-size: 13px; color: #444; }
+    #logout-btn { padding: 6px 12px; border: 1px solid #d0d3d8; border-radius: 6px; background: #fff; cursor: pointer; }
     #session-list li { padding: 10px 14px; cursor: pointer; font-size: 13px; color: #444; border-left: 3px solid transparent; display: flex; align-items: center; gap: 6px; }
     #session-list li:hover { background: #ececf0; }
     #session-list li.active { background: #fff; border-left-color: #10a37f; font-weight: 600; }
@@ -69,6 +72,10 @@
     <h1>Agent</h1>
     <button id="new-btn">＋ 新建会话</button>
     <ul id="session-list"></ul>
+    <div id="account-panel" hidden>
+      <span id="account-name"></span>
+      <button id="logout-btn" type="button">退出登录</button>
+    </div>
   </aside>
 
   <main class="chat">
@@ -87,6 +94,8 @@
     let currentSessionId = null;
     let registering = false;
     let pendingImages = [];
+    let accountEnabled = false;
+    let appReady = false;
     const views = new Map();        // 会话id -> 该会话的视图 <div>（切窗口不销毁）
     const generating = new Set();   // 本窗口正在生成回复的会话id
 
@@ -120,11 +129,54 @@
 
     function showAuth() { $('#auth-overlay').style.display = 'flex'; }
     function hideAuth() { $('#auth-overlay').style.display = 'none'; }
+    function showAccount(user) {
+      $('#account-panel').hidden = !user;
+      $('#account-name').textContent = user ? '当前账号：' + user.username : '';
+    }
+
+    function reloadLoginPage() {
+      appReady = false;
+      showAccount(null);
+      showAuth();
+      window.location.reload();
+    }
+
+    async function apiFetch(url, options) {
+      const resp = await fetch(url, { cache: 'no-store', ...options });
+      if (resp.status === 401 && accountEnabled && !url.startsWith('/api/auth/')) {
+        // 重载会销毁旧账号的视图、图片和在途回调，避免切换账号后混入旧状态。
+        reloadLoginPage();
+        throw new Error('登录已失效，请重新登录');
+      }
+      return resp;
+    }
+
+    async function runAction(action) {
+      try {
+        await action();
+      } catch (err) {
+        if (appReady) alert(err.message || '请求失败，请重试');
+      }
+    }
+
+    async function logout() {
+      const button = $('#logout-btn');
+      button.disabled = true;
+      try {
+        const resp = await apiFetch('/api/auth/logout', { method: 'POST' });
+        if (!resp.ok) throw new Error(await readError(resp));
+        reloadLoginPage();
+      } catch (err) {
+        alert('退出失败：' + err.message);
+        button.disabled = false;
+      }
+    }
     function setAuthMode(register) {
       registering = register;
       $('#auth-title').textContent = register ? '注册 Agent' : '登录 Agent';
       $('#auth-submit').textContent = register ? '注册并登录' : '登录';
       $('#auth-invite').hidden = !register;
+      $('#auth-password').autocomplete = register ? 'new-password' : 'current-password';
       $('#auth-switch').textContent = register ? '已有账号？登录' : '没有账号？注册';
       $('#auth-error').textContent = '';
     }
@@ -217,7 +269,7 @@
     // 用服务器上的历史重建视图。本窗口正在生成该会话时跳过——服务器快照里
     // 没有"在途的那一轮"，覆盖掉会看起来像被中断。
     async function refreshView(id, force) {
-      const resp = await fetch('/api/sessions/' + id);
+      const resp = await apiFetch('/api/sessions/' + id);
       if (!resp.ok) return null;
       const session = await resp.json();
       const v = viewFor(id);
@@ -229,7 +281,9 @@
     }
 
     async function loadSessions() {
-      const resp = await fetch('/api/sessions');
+      if (!appReady) return;
+      const resp = await apiFetch('/api/sessions');
+      if (!resp.ok) throw new Error(await readError(resp));
       const sessions = await resp.json();
       listEl.innerHTML = '';
       sessions.forEach((s) => {
@@ -246,13 +300,13 @@
         title.className = 'title';
         const firstUser = (s.messages || []).find(m => m.role === 'user');
         title.textContent = (firstUser ? firstUser.content : '（空会话）').slice(0, 18);
-        title.onclick = () => selectSession(s.id);
+        title.onclick = () => runAction(() => selectSession(s.id));
 
         const del = document.createElement('span');
         del.className = 'del';
         del.textContent = '✕';
         del.title = '删除会话';
-        del.onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
+        del.onclick = (e) => { e.stopPropagation(); runAction(() => deleteSession(s.id)); };
 
         li.appendChild(dot);
         li.appendChild(title);
@@ -263,13 +317,15 @@
 
     async function deleteSession(id) {
       if (!confirm('删除该会话？此操作不可恢复。')) return;
-      const resp = await fetch('/api/sessions/' + id, { method: 'DELETE' });
+      const resp = await apiFetch('/api/sessions/' + id, { method: 'DELETE' });
       if (!resp.ok) { alert(await readError(resp)); return; }
       const v = views.get(id);
       if (v) { v.remove(); views.delete(id); }
       if (id === currentSessionId) currentSessionId = null;
       await loadSessions();
-      const sessions = await (await fetch('/api/sessions')).json();
+      const sessionsResponse = await apiFetch('/api/sessions');
+      if (!sessionsResponse.ok) throw new Error(await readError(sessionsResponse));
+      const sessions = await sessionsResponse.json();
       if (sessions.length) await selectSession(sessions[0].id);
       else await newSession();
     }
@@ -277,13 +333,14 @@
     async function selectSession(id) {
       currentSessionId = id;
       showView(id);
-      refreshView(id);
+      await refreshView(id);
       refreshComposer();
-      loadSessions();
+      runAction(loadSessions);
     }
 
     async function newSession() {
-      const resp = await fetch('/api/sessions', { method: 'POST' });
+      const resp = await apiFetch('/api/sessions', { method: 'POST' });
+      if (!resp.ok) throw new Error(await readError(resp));
       const session = await resp.json();
       await selectSession(session.id);
     }
@@ -329,10 +386,10 @@
       let rawText = '';
       $('#input').value = '';
       refreshComposer();
-      loadSessions();
+      runAction(loadSessions);
 
       try {
-        const resp = await fetch('/api/sessions/' + id + '/messages', {
+        const resp = await apiFetch('/api/sessions/' + id + '/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, images: images.length ? images : undefined }),
@@ -398,7 +455,7 @@
         stopTimer();
         generating.delete(id);
         refreshComposer();
-        loadSessions();
+        runAction(loadSessions);
       }
     }
 
@@ -407,18 +464,33 @@
       sendMessage($('#input').value);
     });
     $('#input').addEventListener('input', () => { updateCount(); refreshComposer(); });
-    $('#new-btn').onclick = newSession;
+    $('#new-btn').onclick = () => runAction(newSession);
+    $('#logout-btn').onclick = logout;
     $('#auth-switch').onclick = () => setAuthMode(!registering);
     $('#auth-card').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const body = { username: $('#auth-username').value, password: $('#auth-password').value };
-      if (registering) body.invite_code = $('#auth-invite').value;
-      const resp = await fetch('/api/auth/' + (registering ? 'register' : 'login'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      if (!resp.ok) { $('#auth-error').textContent = await readError(resp); return; }
-      hideAuth();
-      await initializeSessions();
+      const button = $('#auth-submit');
+      button.disabled = true;
+      $('#auth-error').textContent = '';
+      try {
+        const body = { username: $('#auth-username').value, password: $('#auth-password').value };
+        if (registering) body.invite_code = $('#auth-invite').value;
+        const resp = await apiFetch('/api/auth/' + (registering ? 'register' : 'login'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(await readError(resp));
+        showAccount(await resp.json());
+        $('#auth-password').value = '';
+        $('#auth-invite').value = '';
+        appReady = true;
+        await initializeSessions();
+        hideAuth();
+      } catch (err) {
+        appReady = false;
+        $('#auth-error').textContent = err.message || '登录失败，请重试';
+      } finally {
+        button.disabled = false;
+      }
     });
 
     function fileToDataUri(file) {
@@ -458,25 +530,43 @@
     async function initializeSessions() {
       // 先问后端真实的输入上限，再决定 maxLength
       try {
-        const h = await (await fetch('/health')).json();
+        const h = await (await apiFetch('/health')).json();
         if (h.max_input_chars) MAX_INPUT = h.max_input_chars;
         if (h.max_images_per_message != null) MAX_IMAGES = h.max_images_per_message;
         if (h.max_image_bytes) MAX_IMAGE_BYTES = h.max_image_bytes;
       } catch (e) { /* 拿不到就不限制，服务端仍会挡 */ }
       applyInputLimit();
 
-      const sessions = await (await fetch('/api/sessions')).json();
+      const sessionsResponse = await apiFetch('/api/sessions');
+      if (!sessionsResponse.ok) throw new Error(await readError(sessionsResponse));
+      const sessions = await sessionsResponse.json();
       if (sessions.length) await selectSession(sessions[0].id);
       else await newSession();
     }
     (async function init() {
-      const account = await (await fetch('/api/auth/me')).json();
-      if (account.enabled && !account.user) { showAuth(); return; }
-      await initializeSessions();
+      try {
+        const resp = await apiFetch('/api/auth/me');
+        if (!resp.ok) throw new Error(await readError(resp));
+        const account = await resp.json();
+        accountEnabled = account.enabled;
+        showAccount(account.user);
+        if (accountEnabled && !account.user) {
+          showAuth();
+          return;
+        }
+        appReady = true;
+        await initializeSessions();
+      } catch (err) {
+        appReady = false;
+        showAuth();
+        $('#auth-error').textContent = '加载失败，请刷新重试：' + err.message;
+      }
     })();
 
-    // 别的窗口新建/删除会话时，侧栏也能看到（只刷新列表，不碰正在显示的历史）
-    setInterval(() => { if (document.visibilityState === 'visible') loadSessions(); }, 5000);
+    // 登录后才轮询；匿名页面不会反复请求受保护接口。
+    setInterval(() => {
+      if (appReady && document.visibilityState === 'visible') runAction(loadSessions);
+    }, 5000);
   </script>
 </body>
 </html>
