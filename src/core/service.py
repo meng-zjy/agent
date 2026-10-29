@@ -17,10 +17,12 @@ from collections.abc import Iterator
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from src.config import settings
 from src.core.agent import AgentStatus, ChatAgent
 from src.core.logger import get_logger, reset_request_context, set_request_context
 from src.core.memory import MemoryStore, Session
 from src.core.models import Message, Role
+from src.core.security import FileReadPolicy
 
 
 # 当前时间提示（每轮重新生成）。
@@ -140,6 +142,7 @@ class ChatService:
         self._agent = agent
         self._memory = memory
         self._system_prompt = system_prompt
+        self._file_policy = FileReadPolicy(settings.mcp_allowed_dir)
         self._max_turns = max_turns
         self._max_chars = max_chars
         self._max_input_chars = max_input_chars
@@ -250,7 +253,8 @@ class ChatService:
     # ---------- 核心：发送一条消息 ----------
 
     def send_events(self, session_id: str, text: str,
-                    images: list[str] | None = None) -> Iterator[str | AgentStatus]:
+                    images: list[str] | None = None, *,
+                    allowed_files: list[str] | None = None) -> Iterator[str | AgentStatus]:
         """把一条用户消息送进会话，流式返回**完整事件流**：正文片段 + 工具进度提示。
 
         成功则把回复记入历史并落盘；失败则撤回本条用户消息再落盘，
@@ -272,27 +276,37 @@ class ChatService:
             self._log.info("请求开始 输入=%d字", len(text))
             self.validate_input(text)
             self.validate_images(images)
+            execution_context = self._file_policy.context(allowed_files or [])
             if not self._acquire(session_id, timeout=self._busy_timeout):
                 self._log.warning("会话忙被拒（等%.0fs超时）", self._busy_timeout)
                 raise SessionBusyError(session_id)
             start = time.perf_counter()
             try:
-                yield from self._send_locked(session_id, text, images)
+                yield from self._send_locked(
+                    session_id, text, images, execution_context
+                )
             finally:
                 self._release(session_id)
                 self._log.info("请求结束 耗时=%.2fs", time.perf_counter() - start)
         finally:
             reset_request_context(token)
 
-    def send(self, session_id: str, text: str, images: list[str] | None = None) -> Iterator[str]:
+    def send(self, session_id: str, text: str, images: list[str] | None = None, *,
+             allowed_files: list[str] | None = None) -> Iterator[str]:
         """只返回正文片段的 `send_events()` 视图。
 
         过滤掉 `AgentStatus`：它是进度提示，不是回复内容。这个过滤器是关键——
         不经过它，`reply += chunk` 会拿字符串加 dataclass 直接崩，而且提示文案
         会被写进会话历史。
         """
-        return (c for c in self.send_events(session_id, text, images)
+        return (c for c in self.send_events(
+            session_id, text, images, allowed_files=allowed_files
+        )
                 if not isinstance(c, AgentStatus))
+
+    def validate_file_grants(self, files: list[str]) -> None:
+        """在 HTTP 流开始前验证一次；执行工具时仍会重新解析和比对路径。"""
+        self._file_policy.context(files)
 
     def validate_input(self, text: str) -> None:
         """校验输入长度。
@@ -372,7 +386,8 @@ class ChatService:
         return self._agent.provider.breaker_state()
 
     def _send_locked(self, session_id: str, text: str,
-                     images: list[str] | None) -> Iterator[str | AgentStatus]:
+                     images: list[str] | None,
+                     execution_context) -> Iterator[str | AgentStatus]:
         session = self._memory.load(session_id)
         if session is None:
             raise ValueError(f"会话不存在: {session_id}")
@@ -389,7 +404,9 @@ class ChatService:
             else:
                 context = self._build_context(session)   # 2. 组装要发给模型的上下文
                 reply = ""
-                for chunk in self._agent.respond(context):
+                for chunk in self._agent.respond(
+                    context, execution_context=execution_context
+                ):
                     if isinstance(chunk, AgentStatus):
                         yield chunk              # 进度提示原样透传，不进 reply
                         continue
@@ -436,8 +453,7 @@ class ChatService:
         时定死的，跑一晚上就过期了），所以在这里按轮生成。这样历史里即使留着几天前的
         时间回答，模型面前总有一份新鲜的实时时间可对照。
 
-        摘要作为 system 消息插在系统提示词之后、对话历史之前：模型自然把它当成
-        "更早聊过的大意"，而不是一段新的指令或一条用户发言。
+        摘要来自模型生成的历史压缩，使用 assistant 消息承载，不能提升到 system 权限。
         """
         prefix: list[Message] = []
         if self._system_prompt:
@@ -448,7 +464,10 @@ class ChatService:
                 content=NOW_HINT.format(now=format_now(time_zone=self._time_zone)),
             ))
         if session.summary:
-            prefix.append(Message(role=Role.SYSTEM, content=f"[对话历史摘要]\n{session.summary}"))
+            prefix.append(Message(
+                role=Role.ASSISTANT,
+                content=f"[对话历史摘要]\n{session.summary}",
+            ))
         return prefix + self._trim(list(session.conversation.messages))
 
     def _trim(self, msgs: list[Message]) -> list[Message]:

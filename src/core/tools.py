@@ -10,6 +10,9 @@ import operator
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable
+from jsonschema import Draft202012Validator
+
+from src.core.security import FileReadPolicy, SecurityViolation, ToolExecutionContext
 
 from src.core.utils import wrap_untrusted
 
@@ -73,6 +76,9 @@ class Tool:
     description: str
     parameters: dict                  # JSON Schema，告诉模型"工具长什么样"
     func: Callable[..., str]          # 真正执行的函数，返回字符串结果
+    read_only: bool = True
+    external_result: bool = False
+    file_policy: FileReadPolicy | None = None
 
 
 class ToolRegistry:
@@ -82,7 +88,21 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
 
     def register(self, tool: Tool) -> None:
+        if tool.name in self._tools:
+            raise ValueError("工具名称重复，禁止覆盖已注册工具")
+        # 不允许远程 schema 引用在参数校验期间产生网络访问。
+        if self._has_reference(tool.parameters):
+            raise ValueError("工具 schema 不允许引用外部定义")
+        Draft202012Validator.check_schema(tool.parameters)
         self._tools[tool.name] = tool
+
+    @staticmethod
+    def _has_reference(value) -> bool:
+        if isinstance(value, dict):
+            return "$ref" in value or "$dynamicRef" in value or any(
+                ToolRegistry._has_reference(item) for item in value.values()
+            )
+        return isinstance(value, list) and any(ToolRegistry._has_reference(item) for item in value)
 
     def schemas(self) -> list[dict]:
         """拼成 openai SDK 的 tools 参数。"""
@@ -96,17 +116,37 @@ class ToolRegistry:
                 },
             }
             for t in self._tools.values()
+            if t.read_only
         ]
 
-    def execute(self, name: str, args: dict) -> str:
+    def execute(self, name: str, args: dict, context: ToolExecutionContext | None = None) -> str:
         """执行工具，返回字符串结果；未知工具 / 执行异常都转成可读错误。"""
         tool = self._tools.get(name)
         if tool is None:
             return f"未知工具：{name}"
+        if not tool.read_only:
+            raise SecurityViolation("文件写入、移动等操作尚未开放，已阻止执行。")
+        if not isinstance(args, dict) or not Draft202012Validator(tool.parameters).is_valid(args):
+            raise SecurityViolation("工具参数不符合声明的结构。")
+        properties = tool.parameters.get("properties")
+        if properties is not None and set(args) - set(properties):
+            raise SecurityViolation("工具参数包含未声明字段。")
+        if tool.file_policy is not None:
+            args = tool.file_policy.authorize(args, context or ToolExecutionContext())
         try:
             return str(tool.func(**args))
-        except Exception as exc:  # noqa: BLE001
-            return f"工具 {name} 执行失败：{exc}"
+        except SecurityViolation:
+            raise
+        except Exception:  # noqa: BLE001
+            return "工具执行失败，请稍后重试。"
+
+    def is_external(self, name: str) -> bool:
+        tool = self._tools.get(name)
+        return tool is not None and tool.external_result
+
+    def visible_schemas(self, context: ToolExecutionContext) -> list[dict]:
+        return [schema for schema in self.schemas()
+                if self._tools[schema["function"]["name"]].file_policy is None or context.allowed_files]
 
     def __len__(self) -> int:
         return len(self._tools)
@@ -162,6 +202,7 @@ def build_default_tools(retriever=None, top_k: int = 4, mcp_tools=None) -> ToolR
                     "required": ["query"],
                 },
                 func=lambda query: _search_knowledge_base(retriever, query, top_k),
+                external_result=True,
             )
         )
     if mcp_tools:

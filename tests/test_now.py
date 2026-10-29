@@ -194,7 +194,7 @@ def test_now_then_summary_then_history(store: MemoryStore):
 
     ctx = service._build_context(session)
     roles = [m.role for m in ctx]
-    assert roles == [Role.SYSTEM, Role.SYSTEM, Role.SYSTEM, Role.USER]
+    assert roles == [Role.SYSTEM, Role.SYSTEM, Role.ASSISTANT, Role.USER]
 
     assert ctx[0].content == "你是助手"
     assert "[当前时间]" in ctx[1].content

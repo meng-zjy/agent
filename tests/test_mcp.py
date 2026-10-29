@@ -67,11 +67,19 @@ def test_wrap_mcp_tools_dispatches():
                        "required": ["path"]},
     }])
     tools = wrap_mcp_tools(bridge)
-    assert len(tools) == 1
-    assert tools[0].name == "list_directory"
-    out = tools[0].func(path="/tmp")
-    assert bridge.called == [("list_directory", {"path": "/tmp"})]
-    assert out == "结果:list_directory{'path': '/tmp'}"
+    assert tools == []
+    assert bridge.called == []
+
+
+def test_wrap_mcp_tools_keeps_only_read_file_capabilities():
+    bridge = _FakeBridge([{
+        "name": "read_file",
+        "description": "读文件",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}},
+                       "required": ["path"]},
+    }])
+    tools = wrap_mcp_tools(bridge)
+    assert [tool.name for tool in tools] == ["read_file"]
 
 
 def test_build_default_tools_registers_mcp():

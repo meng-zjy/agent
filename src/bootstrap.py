@@ -13,6 +13,7 @@ from src.core.logger import get_logger
 from src.core.memory import MemoryStore
 from src.core.provider import BaseProvider
 from src.core.service import ChatService
+from src.core.security import SECURITY_INSTRUCTIONS
 from src.core.tools import build_default_tools
 from src.providers.deepseek import DeepSeekProvider
 from src.providers.sensenova import SenseNovaProvider
@@ -102,7 +103,7 @@ def build_mcp_tools():
         if not bridge.wait_ready(timeout=15):
             get_logger("bootstrap").warning("MCP 服务器连接超时，本次会话不含 MCP 工具")
             return []
-        tools = wrap_mcp_tools(bridge)
+        tools = wrap_mcp_tools(bridge, str(allowed))
         print(f"已连接 MCP 服务器，注册 {len(tools)} 个工具")
         return tools
     except Exception as exc:  # noqa: BLE001
@@ -143,6 +144,7 @@ def build_service(retriever=None) -> ChatService:
     )
     memory = MemoryStore(settings.session_dir)
     system_prompt = settings.system_prompt
+    system_prompt += "\n\n" + SECURITY_INSTRUCTIONS
     if retriever is not None:
         # 有知识库时，明确引导模型"查资料优先"，降低"该查不查"的概率
         system_prompt += (
@@ -152,8 +154,8 @@ def build_service(retriever=None) -> ChatService:
         )
     if mcp_tools:
         system_prompt += (
-            "\n\n本系统接入了外部工具（如文件系统：列目录、读写文件、搜索文件）。"
-            "当用户要求查看目录内容、读写或搜索文件等操作时，优先调用相应的工具完成，不要空口回答。"
+            "\n\n文件工具只允许读取本次用户通过独立授权字段指定的工作区文件。"
+            "未获授权时请引导用户填写文件授权；禁止写入、移动或删除文件。"
         )
     return ChatService(
         agent,

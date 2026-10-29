@@ -33,6 +33,7 @@ HELP_TEXT = """\
   /delete <id>  删除指定会话（不可恢复）
   /clear        清空当前会话的历史消息
   /ingest       重新摄入知识库文档（data/knowledge/）
+  /files <路径> 下一条消息允许读取的工作区相对路径，多个用分号分隔
 
 其他输入都会作为对话内容发送给模型。
 """
@@ -69,6 +70,7 @@ def main() -> None:
     retriever = build_retriever()
     service = build_service(retriever)
     session = service.resume_or_create()
+    allowed_files: list[str] = []
     print(f"Agent · {provider_label()}")
     _show_session_banner(session)
 
@@ -89,8 +91,20 @@ def main() -> None:
         if text == "/help":
             print(HELP_TEXT)
             continue
+        if text.startswith("/files "):
+            candidate_files = [p.strip() for p in text[7:].split(";") if p.strip()]
+            try:
+                service.validate_file_grants(candidate_files)
+            except ValueError as exc:
+                allowed_files = []
+                print(f"[错误] {exc}")
+            else:
+                allowed_files = candidate_files
+                print("已授权下一条消息读取指定文件；写入、移动和删除操作不可用。")
+            continue
         if text == "/new":
             session = service.new_session()
+            allowed_files = []
             print(f"已新建会话 {session.id}。")
             continue
         if text == "/sessions":
@@ -106,6 +120,7 @@ def main() -> None:
                 print(f"会话 {sid} 不存在，用 /sessions 查看可用的会话。")
             else:
                 session = target
+                allowed_files = []
                 print(f"已切换到会话 {session.id}（{len(session.conversation.messages)} 条消息）。")
             continue
         if text == "/delete":
@@ -148,7 +163,10 @@ def main() -> None:
 
         try:
             print("\rAI：思考中…", end="", flush=True)
-            for i, chunk in enumerate(service.send(session.id, text)):
+            current_files, allowed_files = allowed_files, []
+            for i, chunk in enumerate(service.send(
+                session.id, text, allowed_files=current_files
+            )):
                 if i == 0:
                     print("\r" + " " * 20, end="")
                     print("\rAI：", end="", flush=True)

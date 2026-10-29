@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.config import settings
 from src.core.agent import AgentStatus
@@ -21,6 +21,7 @@ from src.core.service import (
     InvalidImageError,
     SessionBusyError,
 )
+from src.core.security import SecurityViolation
 from src.core.auth import AuthError, AuthStore, User
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -30,6 +31,7 @@ _STATIC_INDEX = _STATIC_DIR / "index.html"
 class SendBody(BaseModel):
     text: str
     images: list[str] | None = None
+    allowed_files: list[str] = Field(default_factory=list, max_length=10)
 
 
 class Credentials(BaseModel):
@@ -215,10 +217,19 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         # 被迭代时才执行，那时抛异常只会被下面的 except 吞成 SSE 错误事件。
         service.validate_input(body.text)
         service.validate_images(body.images)
+        try:
+            service.validate_file_grants(body.allowed_files)
+        except SecurityViolation as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
         def stream():
             try:
-                for chunk in service.send_events(session_id, body.text, images=body.images):
+                for chunk in service.send_events(
+                    session_id,
+                    body.text,
+                    images=body.images,
+                    allowed_files=body.allowed_files,
+                ):
                     if isinstance(chunk, AgentStatus):
                         # 进度提示单独一种事件：它不是回复内容，不能和 delta 混着发
                         yield (f"data: {json.dumps({'status': chunk.message}, ensure_ascii=False)}\n\n")

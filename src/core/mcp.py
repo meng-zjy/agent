@@ -14,6 +14,12 @@ from mcp.client.stdio import stdio_client
 
 from src.core.tools import Tool
 from src.core.utils import wrap_untrusted
+from src.core.security import FileReadPolicy
+
+# 由本地代码审核的能力；MCP 自报的 readOnlyHint 不能成为授权依据。
+READ_FILE_TOOLS = frozenset({
+    "read_file", "read_text_file", "read_multiple_files", "get_file_info",
+})
 
 
 def _clean_schema(schema: dict) -> dict:
@@ -106,7 +112,7 @@ class McpToolBridge:
             self._ready.set()
 
 
-def wrap_mcp_tools(bridge: McpToolBridge) -> list[Tool]:
+def wrap_mcp_tools(bridge: McpToolBridge, allowed_dir: str = "data/mcp_workspace") -> list[Tool]:
     """把桥里发现的 MCP 工具包装成我们的 Tool。"""
 
     def make_func(name: str):
@@ -120,6 +126,9 @@ def wrap_mcp_tools(bridge: McpToolBridge) -> list[Tool]:
             description=t["description"],
             parameters=t["parameters"],
             func=make_func(t["name"]),
+            external_result=True,
+            file_policy=FileReadPolicy(allowed_dir),
         )
         for t in bridge.tools()
+        if t["name"] in READ_FILE_TOOLS
     ]

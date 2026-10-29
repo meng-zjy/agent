@@ -4,7 +4,7 @@
 - 摘要字段能持久化（重启还在），旧版 JSON 无该字段也能读
 - 超过 summary_keep_turns 轮才触发，没超不动
 - 滚动摘要：新摘要 = 总结「旧摘要 + 新溢出的旧消息」
-- 注入位置：system prompt 之后、对话历史之前
+- 注入位置：system prompt 之后、对话历史之前，并保持 assistant 角色
 - 摘要失败不影响主对话（旧消息保留、下轮再试）
 """
 
@@ -190,7 +190,7 @@ def test_short_conversation_unchanged(store: MemoryStore):
 
 
 def test_summary_injected_after_system_prompt(store: MemoryStore):
-    """摘要作为 system 消息，插在系统提示词之后、对话历史之前。"""
+    """摘要作为 assistant 消息，插在系统提示词之后、对话历史之前。"""
     provider = RecordingProvider()
     service = make_service(store, provider)
 
@@ -200,7 +200,7 @@ def test_summary_injected_after_system_prompt(store: MemoryStore):
 
     context = service._build_context(session)
     roles = [m.role for m in context]
-    assert roles == [Role.SYSTEM, Role.SYSTEM, Role.USER]
+    assert roles == [Role.SYSTEM, Role.ASSISTANT, Role.USER]
     assert context[0].content == "你是助手"
     assert "[对话历史摘要]" in context[1].content
     assert "用户叫小明" in context[1].content
