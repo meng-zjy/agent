@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # 保留原导入路径，兼容现有调用方；文本统一由 prompts 模块维护。
-from src.prompts import SECURITY_INSTRUCTIONS
+from src.prompts import SECURITY_INSTRUCTIONS, UNTRUSTED_CONTENT_TEMPLATE
 
 
 class SecurityViolation(ValueError):
@@ -33,6 +33,19 @@ def screen_external(text: str) -> str:
     if _SECRET_PATTERN.search(text):
         raise SecurityViolation("外部内容包含疑似凭据，本次处理已停止。")
     return text[:16_000]
+
+
+def screen_tool_result(text: str) -> str:
+    """扫描资料正文，避免把应用添加的围栏误判为伪造边界。
+
+    只剥离完整匹配的一层外壳；正文中的嵌套边界仍交给注入检测拒绝。
+    扫描和长度限制均发生在重新包围栏前，不能截断外层结束标记。
+    """
+    prefix, suffix = UNTRUSTED_CONTENT_TEMPLATE.split("{content}")
+    if text.startswith(prefix) and text.endswith(suffix):
+        content = text[len(prefix):-len(suffix)]
+        return UNTRUSTED_CONTENT_TEMPLATE.format(content=screen_external(content))
+    return screen_external(text)
 
 
 def validate_output(text: str, system_prompts: tuple[str, ...]) -> None:

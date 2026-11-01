@@ -23,7 +23,7 @@ from src.core.tools import ToolRegistry
 from src.core.utils import scrub_text
 from src.core.security import (
     SecurityViolation, ToolExecutionContext,
-    screen_external, validate_output,
+    screen_tool_result, validate_output,
 )
 from src.prompts import AUTHORIZED_FILES_TEMPLATE, SECURITY_INSTRUCTIONS
 
@@ -164,7 +164,7 @@ class ChatAgent:
                 t0 = time.perf_counter()
                 output = self._tools.execute(tc.name, args, context)
                 if self._tools.is_external(tc.name):
-                    output = screen_external(output)
+                    output = screen_tool_result(output)
                 self._log.info("工具完成 %s 耗时=%.2fs 结果=%d字",
                                tc.name, time.perf_counter() - t0, len(output))
                 cleaned.append(
