@@ -23,16 +23,7 @@ from src.core.logger import get_logger, reset_request_context, set_request_conte
 from src.core.memory import MemoryStore, Session
 from src.core.models import Message, Role
 from src.core.security import FileReadPolicy
-
-
-# 当前时间提示（每轮重新生成）。
-# 末尾那句是针对一个真实 bug 的补丁：时间回答会烂在会话历史里，
-# 模型再被问"现在几点"时会直接复读几天前的旧答案，而不是重新查一次。
-NOW_HINT = """[当前时间]
-{now}
-
-这是系统提供的实时时间，每轮都会更新。回答"现在几点 / 今天几号 / 星期几"时必须以此为准；
-历史对话里出现过的时间可能是几天前的旧答案，不要照抄。"""
+from src.prompts import HISTORY_SUMMARY_TEMPLATE, NOW_HINT, SUMMARY_PROMPT
 
 _WEEKDAY = "一二三四五六日"
 _IMAGE_DATA_URI = re.compile(
@@ -102,22 +93,6 @@ def _matches_image_signature(image_format: str, content: bytes) -> bool:
         "webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
     }
     return signatures[image_format.lower()]
-
-
-# 摘要提示词：强调"保留关键事实、丢弃寒暄、控制长度"
-SUMMARY_PROMPT = """\
-你是一个对话摘要器。下面给你一段已有摘要和一段新的对话历史。
-请把它们合并成一段新的摘要：
-- 保留关键事实：人物与称呼、事件、数字、时间、用户偏好与双方约定
-- 丢弃寒暄、重复与无关细节，不要逐句复述
-- 控制在 {max_chars} 字以内，用简洁的中文叙述
-直接输出摘要正文，不要任何前缀或解释。
-
-[已有摘要]
-{existing}
-
-[新对话历史]
-{history}"""
 
 
 class ChatService:
@@ -466,7 +441,7 @@ class ChatService:
         if session.summary:
             prefix.append(Message(
                 role=Role.ASSISTANT,
-                content=f"[对话历史摘要]\n{session.summary}",
+                content=HISTORY_SUMMARY_TEMPLATE.format(summary=session.summary),
             ))
         return prefix + self._trim(list(session.conversation.messages))
 

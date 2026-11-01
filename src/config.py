@@ -3,6 +3,8 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.prompts import DEFAULT_SYSTEM_PROMPT
+
 
 class Settings(BaseSettings):
     """全局配置。字段名对应环境变量（不区分大小写）。
@@ -62,20 +64,7 @@ class Settings(BaseSettings):
 
     # 记忆 / 会话（M2）
     session_dir: str = "data/sessions"
-    system_prompt: str = (
-        "你是一个 AI 助手，请用中文简洁友好地回答用户。\n"
-        "\n"
-        "关于记忆：你运行在一个带持久化记忆的会话系统里。系统会在每一轮对话后把你的完整会话历史自动保存到本地磁盘，"
-        "并在程序重启后自动重新加载、无缝续接。因此你对当前会话（包括程序重启之后）拥有连续、完整的记忆——"
-        "这是本系统的既定能力，不是你的推测。请把这一点当作事实：当用户问起「重启后是否还记得」时，"
-        "直接、肯定地回答「记得」，并主动说出你记得的具体内容，不要假设自己会忘记。\n"
-        "\n"
-        "关于时间与工具：系统每一轮都会把实时时间写进上下文（标记为「[当前时间]」）。"
-        "回答「现在几点 / 今天几号 / 星期几」时以它为准，不要照抄历史对话里出现过的旧时间"
-        "（那些可能是几天前的答案）。数学计算请调用 calculator 工具，拿到真实结果后再用中文回答；"
-        "其他需要真实数据的操作同样优先调用对应工具，不要凭印象作答。"
-        "不要输出 <tool_call>、<function=...> 之类的文本形式的工具调用标签。"
-    )
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT
     max_history_turns: int = 20
     max_history_chars: int = 10000
     # 服务器对中国用户的默认时区。纯报时问题由 ChatService 直接按此时区回答，

@@ -22,9 +22,10 @@ from src.core.provider import BaseProvider, ToolCall
 from src.core.tools import ToolRegistry
 from src.core.utils import scrub_text
 from src.core.security import (
-    SECURITY_INSTRUCTIONS, SecurityViolation, ToolExecutionContext,
+    SecurityViolation, ToolExecutionContext,
     screen_external, validate_output,
 )
+from src.prompts import AUTHORIZED_FILES_TEMPLATE, SECURITY_INSTRUCTIONS
 
 
 # 工具名 → 前端展示用短语。MCP 工具名是动态的，未命中就用原名兜底。
@@ -111,7 +112,7 @@ class ChatAgent:
                              if message.role is Role.SYSTEM), None)
         if system_index is None:
             # 低层 Agent 也能独立执行工具权限检查；没有应用 system prompt 时不凭空改变
-            # 调用方消息形状。生产组装由 bootstrap 把安全规则并入 system prompt。
+            # 调用方消息形状。有 system 消息时由此处统一追加安全规则。
             security_prompt = ""
         else:
             system_message = cleaned[system_index]
@@ -122,8 +123,12 @@ class ChatAgent:
             )
             security_prompt = SECURITY_INSTRUCTIONS
         if context.allowed_files:
-            cleaned.insert(1, Message(Role.SYSTEM, "本次可读取的文件：\n" + "\n".join(
-                sorted(str(path) for path in context.allowed_files))))
+            cleaned.insert(1, Message(
+                Role.SYSTEM,
+                AUTHORIZED_FILES_TEMPLATE.format(
+                    files="\n".join(sorted(str(path) for path in context.allowed_files)),
+                ),
+            ))
         schemas = self._tools.visible_schemas(context)
         if not schemas:
             pieces = list(self._bounded_text(self._provider.chat_stream(cleaned)))

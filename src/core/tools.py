@@ -15,6 +15,13 @@ from jsonschema import Draft202012Validator
 from src.core.security import FileReadPolicy, SecurityViolation, ToolExecutionContext
 
 from src.core.utils import wrap_untrusted
+from src.prompts import (
+    CALCULATOR_TOOL_DESCRIPTION,
+    EXPRESSION_DESCRIPTION,
+    KNOWLEDGE_TOOL_DESCRIPTION,
+    QUERY_DESCRIPTION,
+    TIME_TOOL_DESCRIPTION,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +170,7 @@ def build_default_tools(retriever=None, top_k: int = 4, mcp_tools=None) -> ToolR
     registry.register(
         Tool(
             name="get_current_time",
-            description="获取当前日期和时间。当用户询问时间、日期、星期几时调用。",
+            description=TIME_TOOL_DESCRIPTION,
             parameters={"type": "object", "properties": {}, "required": []},
             func=get_current_time,
         )
@@ -171,13 +178,13 @@ def build_default_tools(retriever=None, top_k: int = 4, mcp_tools=None) -> ToolR
     registry.register(
         Tool(
             name="calculator",
-            description="计算数学表达式并返回结果。当用户要求计算、算数、求值时调用。",
+            description=CALCULATOR_TOOL_DESCRIPTION,
             parameters={
                 "type": "object",
                 "properties": {
                     "expression": {
                         "type": "string",
-                        "description": "要计算的数学表达式，例如 '123 * 45'",
+                        "description": EXPRESSION_DESCRIPTION,
                     }
                 },
                 "required": ["expression"],
@@ -189,14 +196,13 @@ def build_default_tools(retriever=None, top_k: int = 4, mcp_tools=None) -> ToolR
         registry.register(
             Tool(
                 name="search_knowledge_base",
-                description="在本地知识库中检索与问题相关的文档片段。"
-                            "当用户询问的问题可能在你掌握的资料/文档/知识库里有答案时调用。",
+                description=KNOWLEDGE_TOOL_DESCRIPTION,
                 parameters={
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "要检索的问题或关键词",
+                            "description": QUERY_DESCRIPTION,
                         }
                     },
                     "required": ["query"],

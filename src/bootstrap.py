@@ -4,6 +4,7 @@
 CLI（src/cli.py）和 Web（src/api.py）都从这里取构建逻辑，保证两边行为一致。
 """
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -13,8 +14,8 @@ from src.core.logger import get_logger
 from src.core.memory import MemoryStore
 from src.core.provider import BaseProvider
 from src.core.service import ChatService
-from src.core.security import SECURITY_INSTRUCTIONS
 from src.core.tools import build_default_tools
+from src.prompts import DEFAULT_SYSTEM_PROMPT, PROMPT_VERSION, build_system_prompt
 from src.providers.deepseek import DeepSeekProvider
 from src.providers.sensenova import SenseNovaProvider
 
@@ -143,20 +144,21 @@ def build_service(retriever=None) -> ChatService:
         ),
     )
     memory = MemoryStore(settings.session_dir)
-    system_prompt = settings.system_prompt
-    system_prompt += "\n\n" + SECURITY_INSTRUCTIONS
-    if retriever is not None:
-        # 有知识库时，明确引导模型"查资料优先"，降低"该查不查"的概率
-        system_prompt += (
-            "\n\n本系统接入了本地知识库。当用户询问的可能是存在于资料/文档中的信息"
-            "（如某个项目、公司、产品、人物等具体问题）时，优先调用 search_knowledge_base 工具检索后再回答，"
-            "不要直接说不知道；回答时尽量标注信息来源的文件名。"
-        )
-    if mcp_tools:
-        system_prompt += (
-            "\n\n文件工具只允许读取本次用户通过独立授权字段指定的工作区文件。"
-            "未获授权时请引导用户填写文件授权；禁止写入、移动或删除文件。"
-        )
+    system_prompt = build_system_prompt(
+        settings.system_prompt,
+        has_retriever=retriever is not None,
+        has_mcp_tools=bool(mcp_tools),
+    )
+    # 环境变量可以覆盖默认人设；记录指纹区分实际配置，禁止将提示词正文写入日志。
+    get_logger("bootstrap").info(
+        "prompt_version=%s system_prompt_sha256=%s custom_system_prompt=%s "
+        "has_retriever=%s has_mcp_tools=%s",
+        PROMPT_VERSION,
+        hashlib.sha256(system_prompt.encode("utf-8")).hexdigest(),
+        settings.system_prompt != DEFAULT_SYSTEM_PROMPT,
+        retriever is not None,
+        bool(mcp_tools),
+    )
     return ChatService(
         agent,
         memory,
