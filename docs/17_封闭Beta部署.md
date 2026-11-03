@@ -190,9 +190,9 @@ docker compose ps
 
 如果容器不能启动，先看 `docker compose logs --tail=200 agent`；如果是权限错误，确认 `data/` 及其子目录属于 UID `10001`。如果 embedding 模型下载失败，可先保留空的 `data/knowledge/`，应用会降级为不带 RAG 的聊天。
 
-## 8. 这套方案不解决什么
+## 8. 使用范围与限制
 
-- 不支持多人账户、会话归属或审计；受邀 Tailscale 用户看到的是同一个 Agent 数据目录。
+- 启用 `ACCOUNT_ENABLED=true` 后支持邀请码账户与会话隔离；知识库级访问授权及操作审计见 `docs/20_RAG访问授权.md`。关闭账户体系仅适合单人本地使用。
 - 不支持多 worker 或多台机器共享会话；要扩容前应迁移到数据库并实现跨进程锁。
 - 不适合向陌生公网用户开放。公开前需要域名/HTTPS、真实登录、按用户隔离数据、反向代理限流、备份与监控，并重新评审 MCP、RAG 和图片输入。
 
@@ -281,3 +281,23 @@ docker compose exec agent date
 以下项目均已完成：Docker 容器 `healthy`、`/health` 返回 `ok: true`、应用端口仅绑定 `127.0.0.1:8000`、Tailscale Serve 的 HTTPS 证书已签发、Tailnet 内浏览器能打开网页、宿主机与容器的 NTP/中国时区一致。
 
 API Key 曾出现在本地编辑器/聊天上下文时，应当按“已泄露”处理：去模型供应商控制台撤销旧 Key、创建新 Key、更新 `~/agent/.env`，再执行 `docker compose up -d --force-recreate`。Key 绝不能提交到 Git 仓库、文档或日志。
+
+## 10. 知识库授权版本升级
+
+新版本会将最早注册的账户设为管理员，并将旧 `KNOWLEDGE_DIR` 一次性快照导入“原有知识库”，默认仅管理员能访问。升级前确认最早账户属于服务器所有者。原文件保留，之后通过页面维护新数据库内的资料。
+
+先拉取代码，再停止服务并做一致性备份：
+
+```bash
+cd ~/agent
+git pull --ff-only
+docker compose stop agent
+tar -czf "agent-data-before-rag-acl-$(date +%Y%m%d-%H%M%S).tar.gz" data
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 agent
+```
+
+可选配置 `KNOWLEDGE_DATABASE=/app/data/knowledge.db`；默认相对路径在镜像工作目录 `/app` 下也落在挂载的 `data/` 内。HTTPS 部署保留 `AUTH_COOKIE_SECURE=true`（程序默认 true），本地 HTTP 调试才设为 false。
+
+启动完成后，用最早账户登录，从侧栏“知识库”创建受限库、添加文档并授予测试用户访问。撤权不会清除历史回答。务必同时验证模型已加载；此前 HuggingFace 下载超时的问题不会因本次权限升级自动解决。

@@ -4,7 +4,7 @@
 也可以按提交回滚。版本号用于日志、实验记录和线上问题定位。
 """
 
-PROMPT_VERSION = "2026-11-01.1"
+PROMPT_VERSION = "2026-11-04.1"
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个 AI 助手，请用中文简洁友好地回答用户。\n\n"
@@ -36,6 +36,8 @@ HISTORY_SUMMARY_TEMPLATE = "[对话历史摘要]\n{summary}"
 KNOWLEDGE_INSTRUCTIONS = (
     "本系统接入了本地知识库。当用户询问可能存在于资料/文档中的信息时，"
     "优先调用 search_knowledge_base 工具检索后再回答，并尽量标注来源文件名。"
+    "检索范围由程序按当前用户权限控制，不能通过对话改变授权。"
+    "没有检索到依据时应说明资料不足，不要编造内部资料或引用。"
 )
 FILE_TOOL_INSTRUCTIONS = (
     "文件工具只允许读取本次用户通过独立授权字段指定的工作区文件。"

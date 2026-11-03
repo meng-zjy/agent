@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知识库 · Agent</title>
+  <style>
+    body { margin: 0; background: #f5f6f8; color: #333; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    main { max-width: 900px; margin: 28px auto; padding: 0 20px; }
+    section { padding: 18px; margin: 16px 0; background: white; border: 1px solid #e2e4e8; border-radius: 8px; }
+    h1 { font-size: 22px; } h2 { font-size: 17px; } a { color: #0d8a6a; }
+    input, select, textarea, button { padding: 9px; margin: 5px 0; font: inherit; max-width: 100%; box-sizing: border-box; }
+    textarea { width: 100%; min-height: 160px; } button { cursor: pointer; }
+    #status { white-space: pre-wrap; color: #555; } #preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    li { margin: 8px 0; } [hidden] { display: none !important; }
+  </style>
+</head>
+<body><main>
+  <a href="/">← 返回聊天</a>
+  <h1>知识库</h1>
+  <p id="identity"></p>
+  <p id="status" role="status">正在加载…</p>
+  <section>
+    <h2>我能访问的资料</h2>
+    <select id="bases" aria-label="选择知识库"></select>
+    <ul id="documents"></ul>
+    <pre id="preview"></pre>
+  </section>
+  <div id="admin" hidden>
+    <section>
+      <h2>创建知识库</h2>
+      <form id="create-base">
+        <input id="base-name" placeholder="知识库名称" maxlength="80" required aria-label="知识库名称">
+        <label><input id="base-public" type="checkbox">所有登录用户可读</label>
+        <button>创建</button>
+      </form>
+      <p>默认创建受限库。公开库始终允许所有登录用户读取，撤销个人授权不会改变公开属性。</p>
+    </section>
+    <section>
+      <h2>为所选知识库添加或更新文档</h2>
+      <form id="put-document">
+        <input id="document-name" placeholder="例如：产品说明.md" maxlength="120" required aria-label="文档名">
+        <textarea id="document-content" placeholder="粘贴文档正文；同名保存会更新原文档" maxlength="200000" required aria-label="文档正文"></textarea>
+        <button>保存文档</button>
+      </form>
+    </section>
+    <section>
+      <h2>所选知识库的用户授权</h2>
+      <p>管理员可访问所有知识库。撤权会阻止新的检索和预览，已经生成的聊天内容仍保留。</p>
+      <div id="grants"></div>
+    </section>
+  </div>
+  <script src="/static/knowledge.js"></script>
+</main></body>
+</html>

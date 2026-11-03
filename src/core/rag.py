@@ -60,13 +60,17 @@ class DocumentStore:
     def ingest_file(self, path: Path) -> int:
         """读一个文件 → 切块 → 向量化 → 存入。返回新增 chunk 数。"""
         text = path.read_text(encoding="utf-8")
+        return self.ingest_text(text, path.name)
+
+    def ingest_text(self, text: str, source: str) -> int:
+        """摄入已经由知识库存储读取的正文；来源仅作为展示标签。"""
         pieces = chunk_text(text, self._chunk_size, self._chunk_overlap)
         if not pieces:
             return 0
         vectors = self._embedder.embed_many(pieces)
         base = len(self._chunks)
         for i, (piece, vec) in enumerate(zip(pieces, vectors)):
-            self._chunks.append(Chunk(text=piece, source=path.name, index=i))
+            self._chunks.append(Chunk(text=piece, source=source, index=i))
             self._vectors.append(vec)
         return len(pieces)
 
@@ -87,12 +91,16 @@ class DocumentStore:
 
     def search(self, query: str, top_k: int = 4) -> list[Chunk]:
         """问题向量化 → 余弦相似度 → 返回最相关的 top_k 个 chunk。"""
+        return [chunk for _, chunk in self.search_scored(query, top_k)]
+
+    def search_scored(self, query: str, top_k: int = 4) -> list[tuple[float, Chunk]]:
+        """返回分数，供多个已授权索引合并排名；无权限索引不会进入此函数。"""
         if not self._chunks:
             return []
         qvec = self._embedder.embed(query)
         scores = [cosine(qvec, v) for v in self._vectors]
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-        return [self._chunks[i] for i in ranked[:top_k]]
+        return [(scores[i], self._chunks[i]) for i in ranked[:top_k]]
 
     def __len__(self) -> int:
         return len(self._chunks)

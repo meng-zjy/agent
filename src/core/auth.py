@@ -19,6 +19,7 @@ _TOKEN_BYTES = 32
 class User:
     id: int
     username: str
+    is_admin: bool = False
 
 
 class AuthError(ValueError):
@@ -41,6 +42,7 @@ class AuthStore:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     @contextmanager
@@ -71,6 +73,11 @@ class AuthStore:
                     agent_session_id TEXT PRIMARY KEY,
                     user_id INTEGER NOT NULL REFERENCES users(id)
                 );
+                CREATE TABLE IF NOT EXISTS administrators (
+                    user_id INTEGER PRIMARY KEY REFERENCES users(id)
+                );
+                INSERT OR IGNORE INTO administrators(user_id)
+                    SELECT MIN(id) FROM users HAVING COUNT(*) > 0;
             """)
 
     def register(self, username: str, password: str, invite_code: str) -> tuple[User, str]:
@@ -91,7 +98,10 @@ class AuthStore:
                 )
             except sqlite3.IntegrityError as exc:
                 raise AuthError("用户名已存在") from exc
-            user = User(id=cursor.lastrowid, username=username)
+            user_id = cursor.lastrowid
+            if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1:
+                db.execute("INSERT INTO administrators(user_id) VALUES (?)", (user_id,))
+            user = User(id=user_id, username=username, is_admin=self.is_admin(user_id, db))
             return user, self._create_login_session(db, user.id)
 
     def login(self, username: str, password: str) -> tuple[User, str]:
@@ -102,7 +112,7 @@ class AuthStore:
             actual = hashlib.scrypt(password.encode(), salt=row["password_salt"], n=_SCRYPT_N, r=8, p=1)
             if not hmac.compare_digest(actual, row["password_hash"]):
                 raise AuthError("用户名或密码错误")
-            return User(id=row["id"], username=row["username"]), self._create_login_session(db, row["id"])
+            return User(row["id"], row["username"], self.is_admin(row["id"], db)), self._create_login_session(db, row["id"])
 
     def user_for_token(self, token: str | None) -> User | None:
         if not token:
@@ -115,7 +125,21 @@ class AuthStore:
                 if row is not None:
                     db.execute("DELETE FROM login_sessions WHERE token_hash = ?", (_hash_token(token),))
                 return None
-            return User(id=row["id"], username=row["username"])
+            return User(row["id"], row["username"], self.is_admin(row["id"], db))
+
+    def is_admin(self, user_id: int, db=None) -> bool:
+        """管理员资格只从数据库读取，不能由请求或模型声明。"""
+        if db is not None:
+            return db.execute("SELECT 1 FROM administrators WHERE user_id = ?", (user_id,)).fetchone() is not None
+        with self._database() as connection:
+            return self.is_admin(user_id, connection)
+
+    def list_users(self) -> list[dict]:
+        """仅供管理接口列出账户标识，绝不返回密码或登录凭据。"""
+        with self._database() as db:
+            return [{"id": row["id"], "username": row["username"],
+                     "is_admin": self.is_admin(row["id"], db)}
+                    for row in db.execute("SELECT id, username FROM users ORDER BY id")]
 
     def logout(self, token: str | None) -> None:
         if token:

@@ -68,6 +68,7 @@ class ToolExecutionContext:
     """每次请求单独创建；文件授权来自独立输入字段，不能从模型文字中推断。"""
 
     allowed_files: frozenset[Path] = frozenset()
+    user_id: int | None = None
 
 
 class FileReadPolicy:

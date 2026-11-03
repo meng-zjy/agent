@@ -220,6 +220,41 @@ def test_accounts_require_invite_and_isolate_sessions(tmp_path, monkeypatch):
     assert bob.delete(f"/api/sessions/{session_id}").status_code == 404
 
 
+def test_local_account_cookie_is_sent_over_http(tmp_path, monkeypatch):
+    """本地开发用 HTTP 时，浏览器仍应带回会话 Cookie 完成后续请求。"""
+    monkeypatch.setattr(settings, "account_enabled", True)
+    monkeypatch.setattr(settings, "registration_invite_code", "test-invite-code")
+    monkeypatch.setattr(settings, "auth_database", str(tmp_path / "auth.db"))
+    monkeypatch.setattr(settings, "auth_cookie_secure", False)
+    service = ChatService(ChatAgent(FakeProvider()), MemoryStore(tmp_path / "sessions"))
+    client = TestClient(create_app(service), base_url="http://testserver")
+
+    response = client.post("/api/auth/register", json={
+        "username": "alice", "password": "password-123", "invite_code": "test-invite-code",
+    })
+
+    assert response.status_code == 200
+    assert "Secure" not in response.headers["set-cookie"]
+    assert client.get("/api/sessions").status_code == 200
+
+
+def test_production_account_cookie_requires_https(tmp_path, monkeypatch):
+    """HTTPS 部署必须让认证 Cookie 保留 Secure 属性。"""
+    monkeypatch.setattr(settings, "account_enabled", True)
+    monkeypatch.setattr(settings, "registration_invite_code", "test-invite-code")
+    monkeypatch.setattr(settings, "auth_database", str(tmp_path / "auth.db"))
+    monkeypatch.setattr(settings, "auth_cookie_secure", True)
+    service = ChatService(ChatAgent(FakeProvider()), MemoryStore(tmp_path / "sessions"))
+    client = TestClient(create_app(service), base_url="https://testserver")
+
+    response = client.post("/api/auth/register", json={
+        "username": "alice", "password": "password-123", "invite_code": "test-invite-code",
+    })
+
+    assert response.status_code == 200
+    assert "Secure" in response.headers["set-cookie"]
+
+
 # ---------------------------------------------------------------------------
 # 并发：会话忙时，前端要收到 error 事件而不是写坏历史
 # ---------------------------------------------------------------------------

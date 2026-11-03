@@ -23,6 +23,7 @@ from src.core.service import (
 )
 from src.core.security import SecurityViolation
 from src.core.auth import AuthError, AuthStore, User
+from src.core.knowledge import KnowledgeCatalog, KnowledgeError
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 _STATIC_INDEX = _STATIC_DIR / "index.html"
@@ -38,6 +39,16 @@ class Credentials(BaseModel):
     username: str
     password: str
     invite_code: str = ""
+
+
+class KnowledgeBaseBody(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    public: bool = False
+
+
+class KnowledgeDocumentBody(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=1, max_length=200_000)
 
 
 # 速率限制（M9）：每 IP 一个滑动窗口计数。内存态，多进程部署各算各的（见 docs/13 §10）。
@@ -61,13 +72,15 @@ def create_app(service: ChatService | None = None) -> FastAPI:
     service 不传时按默认配置构建（供 uvicorn --factory / python -m src.api 用）；
     测试时传入注入假 provider 的 service，不花额度、不加载 BGE 模型。
     """
-    if service is None:
-        from src.bootstrap import build_retriever, build_service
-        service = build_service(build_retriever())
-
     auth_store = None
+    knowledge_catalog = None
     if settings.account_enabled:
         auth_store = AuthStore(settings.auth_database, settings.registration_invite_code, settings.auth_session_hours)
+        knowledge_catalog = KnowledgeCatalog(settings.knowledge_database, auth_store.is_admin)
+        knowledge_catalog.import_legacy(Path(settings.knowledge_dir))
+    if service is None:
+        from src.bootstrap import build_retriever, build_service
+        service = build_service(build_retriever(knowledge_catalog))
     app = FastAPI(title="Agent")
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
@@ -110,6 +123,10 @@ def create_app(service: ChatService | None = None) -> FastAPI:
         """不合规图片与超长文本一样，在建立 SSE 流之前返回明确的 400。"""
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
+    @app.exception_handler(KnowledgeError)
+    async def _knowledge_error(request: Request, exc: KnowledgeError):
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
     def _current_user(request: Request) -> User | None:
         return auth_store.user_for_token(request.cookies.get("agent_session")) if auth_store else None
 
@@ -120,11 +137,92 @@ def create_app(service: ChatService | None = None) -> FastAPI:
     @app.get("/api/auth/me")
     def me(request: Request):
         user = _current_user(request)
-        return {"enabled": bool(auth_store), "user": {"id": user.id, "username": user.username} if user else None}
+        return {"enabled": bool(auth_store), "user": {
+            "id": user.id, "username": user.username, "is_admin": user.is_admin,
+        } if user else None}
+
+    def _knowledge_user(request: Request, admin: bool = False) -> User:
+        user = _current_user(request)
+        if user is None or knowledge_catalog is None:
+            raise HTTPException(status_code=401, detail="知识库管理需要启用账户并登录")
+        if admin and not user.is_admin:
+            raise HTTPException(status_code=403, detail="需要管理员权限")
+        return user
+
+    def _knowledge_call(operation, *args):
+        try:
+            return operation(*args)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from None
+
+    @app.get("/api/knowledge-bases")
+    def list_knowledge_bases(request: Request):
+        user = _knowledge_user(request)
+        return knowledge_catalog.list_bases(user.id)
+
+    @app.post("/api/knowledge-bases", status_code=201)
+    def create_knowledge_base(body: KnowledgeBaseBody, request: Request):
+        user = _knowledge_user(request, admin=True)
+        return knowledge_catalog.create_base(user.id, body.name, body.public)
+
+    @app.get("/api/admin/users")
+    def list_knowledge_users(request: Request):
+        _knowledge_user(request, admin=True)
+        return auth_store.list_users()
+
+    @app.get("/api/knowledge-bases/{base_id}/documents")
+    def list_knowledge_documents(base_id: str, request: Request):
+        user = _knowledge_user(request)
+        return _knowledge_call(knowledge_catalog.list_documents, user.id, base_id)
+
+    @app.get("/api/knowledge-bases/{base_id}/documents/{document_id}")
+    def read_knowledge_document(base_id: str, document_id: str, request: Request):
+        user = _knowledge_user(request)
+        return _knowledge_call(knowledge_catalog.read_document, user.id, base_id, document_id)
+
+    @app.put("/api/knowledge-bases/{base_id}/documents")
+    def put_knowledge_document(base_id: str, body: KnowledgeDocumentBody, request: Request):
+        user = _knowledge_user(request, admin=True)
+        _knowledge_call(knowledge_catalog.put_document, user.id, base_id, body.name, body.content)
+        return {"ok": True}
+
+    @app.delete("/api/knowledge-bases/{base_id}/documents/{document_id}")
+    def delete_knowledge_document(base_id: str, document_id: str, request: Request):
+        user = _knowledge_user(request, admin=True)
+        _knowledge_call(knowledge_catalog.delete_document, user.id, base_id, document_id)
+        return {"ok": True}
+
+    @app.get("/api/knowledge-bases/{base_id}/grants")
+    def list_knowledge_grants(base_id: str, request: Request):
+        user = _knowledge_user(request, admin=True)
+        return _knowledge_call(knowledge_catalog.grants, user.id, base_id)
+
+    @app.put("/api/knowledge-bases/{base_id}/grants/{user_id}")
+    def grant_knowledge(base_id: str, user_id: int, request: Request):
+        user = _knowledge_user(request, admin=True)
+        if not any(account["id"] == user_id for account in auth_store.list_users()):
+            raise HTTPException(status_code=404, detail="用户不存在")
+        _knowledge_call(knowledge_catalog.set_grant, user.id, base_id, user_id, True)
+        return {"ok": True}
+
+    @app.delete("/api/knowledge-bases/{base_id}/grants/{user_id}")
+    def revoke_knowledge(base_id: str, user_id: int, request: Request):
+        user = _knowledge_user(request, admin=True)
+        _knowledge_call(knowledge_catalog.set_grant, user.id, base_id, user_id, False)
+        return {"ok": True}
 
     def _login_response(user: User, token: str) -> JSONResponse:
         response = JSONResponse({"id": user.id, "username": user.username})
-        response.set_cookie("agent_session", token, httponly=True, secure=True, samesite="lax", max_age=settings.auth_session_hours * 3600)
+        response.set_cookie(
+            "agent_session",
+            token,
+            httponly=True,
+            secure=settings.auth_cookie_secure,
+            samesite="lax",
+            max_age=settings.auth_session_hours * 3600,
+        )
         return response
 
     @app.post("/api/auth/register")
@@ -212,7 +310,8 @@ def create_app(service: ChatService | None = None) -> FastAPI:
 
     @app.post("/api/sessions/{session_id}/messages")
     def send_message(session_id: str, body: SendBody, request: Request):
-        _require(session_id, _current_user(request))
+        user = _current_user(request)
+        _require(session_id, user)
         # 预检查必须在 StreamingResponse 返回之前——send() 是生成器，函数体要到
         # 被迭代时才执行，那时抛异常只会被下面的 except 吞成 SSE 错误事件。
         service.validate_input(body.text)
@@ -229,6 +328,7 @@ def create_app(service: ChatService | None = None) -> FastAPI:
                     body.text,
                     images=body.images,
                     allowed_files=body.allowed_files,
+                    user_id=user.id if user else None,
                 ):
                     if isinstance(chunk, AgentStatus):
                         # 进度提示单独一种事件：它不是回复内容，不能和 delta 混着发

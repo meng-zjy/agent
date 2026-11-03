@@ -86,6 +86,7 @@ class Tool:
     read_only: bool = True
     external_result: bool = False
     file_policy: FileReadPolicy | None = None
+    contextual_func: Callable[..., str] | None = None
 
 
 class ToolRegistry:
@@ -141,6 +142,8 @@ class ToolRegistry:
         if tool.file_policy is not None:
             args = tool.file_policy.authorize(args, context or ToolExecutionContext())
         try:
+            if tool.contextual_func is not None:
+                return str(tool.contextual_func(context=context or ToolExecutionContext(), **args))
             return str(tool.func(**args))
         except SecurityViolation:
             raise
@@ -208,6 +211,11 @@ def build_default_tools(retriever=None, top_k: int = 4, mcp_tools=None) -> ToolR
                     "required": ["query"],
                 },
                 func=lambda query: _search_knowledge_base(retriever, query, top_k),
+                contextual_func=(
+                    lambda query, context: _format_knowledge_chunks(
+                        retriever.search_for_user(context.user_id, query, top_k=top_k)
+                    )
+                ) if hasattr(retriever, "search_for_user") else None,
                 external_result=True,
             )
         )
@@ -224,6 +232,11 @@ def _search_knowledge_base(retriever, query: str, top_k: int) -> str:
     文档里可能有提示词注入。空库提示不需要围栏——它不是外部内容。
     """
     chunks = retriever.search(query, top_k=top_k)
+    return _format_knowledge_chunks(chunks)
+
+
+def _format_knowledge_chunks(chunks) -> str:
+    """仅格式化授权后得到的片段；引用包含知识库与文档来源。"""
     if not chunks:
         return "（知识库为空或没有检索到相关内容）"
     body = "\n\n---\n\n".join(f"[{c.source}#{c.index}] {c.text}" for c in chunks)

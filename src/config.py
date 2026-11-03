@@ -108,6 +108,9 @@ class Settings(BaseSettings):
     registration_invite_code: str = ""
     auth_database: str = "data/auth.db"
     auth_session_hours: int = 168
+    # 默认保护既有 HTTPS 部署；本地 http://localhost 调试时在 .env 显式设为 false。
+    auth_cookie_secure: bool = True
+    knowledge_database: str = "data/knowledge.db"
     # 速率限制：每 IP 每分钟最多多少请求，0 = 关闭
     rate_limit_rpm: int = 0
 

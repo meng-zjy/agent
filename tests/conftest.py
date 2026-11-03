@@ -22,7 +22,14 @@ from src.config import settings
 
 @pytest.fixture(autouse=True)
 def _isolate_log_dir(tmp_path, monkeypatch):
-    """每个用例独立日志目录，测完清掉本用例挂的 handler。"""
+    """隔离本地 .env，并让每个用例使用独立日志目录。"""
+    # 开发机可能启用了账户功能。测试中未显式启用账户的场景仍要覆盖默认匿名行为，
+    # 账户测试会在自身用例里覆盖这些值。
+    monkeypatch.setattr(settings, "account_enabled", False)
+    monkeypatch.setattr(settings, "registration_invite_code", "")
+    monkeypatch.setattr(settings, "auth_cookie_secure", True)
+    monkeypatch.setattr(settings, "knowledge_database", str(tmp_path / "knowledge.db"))
+    monkeypatch.setattr(settings, "knowledge_dir", str(tmp_path / "knowledge"))
     monkeypatch.setattr(settings, "log_dir", str(tmp_path / "logs"))
     yield
     logger_mod.reset()

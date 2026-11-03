@@ -61,13 +61,22 @@ def build_provider() -> BaseProvider:
     )
 
 
-def build_retriever():
+def build_retriever(knowledge_catalog=None):
     """构建知识库检索器；fastembed 缺失/模型下载失败时返回 None（降级为无 RAG）。"""
     try:
         from src.core.embeddings import FastembedEmbedder
         from src.core.rag import DocumentStore
 
+        # 账户模式下禁止意外退回全目录检索；CLI 无身份时不加载受限资料。
+        if settings.account_enabled and knowledge_catalog is None:
+            return None
         embedder = FastembedEmbedder(model_name=settings.embedding_model)
+        if knowledge_catalog is not None:
+            from src.core.knowledge import AuthorizedRetriever
+
+            return AuthorizedRetriever(
+                knowledge_catalog, embedder, settings.chunk_size, settings.chunk_overlap
+            )
         store = DocumentStore(embedder, settings.chunk_size, settings.chunk_overlap)
         kdir = Path(settings.knowledge_dir)
         if kdir.exists():

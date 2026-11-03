@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import uuid
+from dataclasses import replace
 from collections.abc import Iterator
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -229,7 +230,8 @@ class ChatService:
 
     def send_events(self, session_id: str, text: str,
                     images: list[str] | None = None, *,
-                    allowed_files: list[str] | None = None) -> Iterator[str | AgentStatus]:
+                    allowed_files: list[str] | None = None,
+                    user_id: int | None = None) -> Iterator[str | AgentStatus]:
         """把一条用户消息送进会话，流式返回**完整事件流**：正文片段 + 工具进度提示。
 
         成功则把回复记入历史并落盘；失败则撤回本条用户消息再落盘，
@@ -252,6 +254,7 @@ class ChatService:
             self.validate_input(text)
             self.validate_images(images)
             execution_context = self._file_policy.context(allowed_files or [])
+            execution_context = replace(execution_context, user_id=user_id)
             if not self._acquire(session_id, timeout=self._busy_timeout):
                 self._log.warning("会话忙被拒（等%.0fs超时）", self._busy_timeout)
                 raise SessionBusyError(session_id)
