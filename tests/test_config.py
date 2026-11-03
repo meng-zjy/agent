@@ -21,6 +21,9 @@ _ENV_KEYS = (
     "MCP_ENABLED",
     "MAX_IMAGES_PER_MESSAGE",
     "MAX_IMAGE_BYTES",
+    "RAG_ENABLED",
+    "EMBEDDING_CACHE_DIR",
+    "EMBEDDING_LOCAL_FILES_ONLY",
 )
 
 
@@ -46,6 +49,9 @@ def test_defaults():
     assert s.mcp_enabled is True
     assert s.max_images_per_message == 3
     assert s.max_image_bytes == 3 * 1024 * 1024
+    assert s.rag_enabled is True
+    assert s.embedding_cache_dir == "data/models"
+    assert s.embedding_local_files_only is False
 
 
 def test_env_override(monkeypatch):

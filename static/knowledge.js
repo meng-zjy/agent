@@ -151,6 +151,19 @@ perform(async () => {
   currentUser = account.user;
   select('#identity').textContent = currentUser.username + (currentUser.is_admin ? ' · 管理员' : '');
   select('#admin').hidden = !currentUser.is_admin;
+  try {
+    const health = await requestKnowledge('/health');
+    const state = health.rag ? health.rag.state : 'unknown';
+    const messages = {
+      ready: '知识库检索已加载。回答仍取决于你的访问权限和库内资料。',
+      disabled: '知识库检索已关闭。文档管理和预览仍可使用。',
+      unavailable: '知识库检索暂不可用。文档管理和预览仍可使用，请联系管理员检查启动日志。',
+      unknown: '当前服务未报告检索状态。文档管理和预览仍可使用。',
+    };
+    select('#retrieval-status').textContent = messages[state] || messages.unknown;
+  } catch (error) {
+    select('#retrieval-status').textContent = '暂时无法读取检索状态。请刷新重试。';
+  }
   if (currentUser.is_admin) accounts = await requestKnowledge('/api/admin/users');
   await loadBases();
 });

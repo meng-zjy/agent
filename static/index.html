@@ -26,6 +26,7 @@
     #session-list li:hover .del { visibility: visible; }
     #session-list li .del:hover { color: #e5484d; }
     .chat { flex: 1; display: flex; flex-direction: column; }
+    #rag-status { padding: 8px 14px; font-size: 12px; background: #fff8e6; color: #775500; }
     #messages { flex: 1; overflow-y: auto; padding: 20px; }
     /* 每个会话一个视图；切换会话只改显隐，在途的流式输出不会被打断 */
     .session-view { display: block; }
@@ -80,6 +81,7 @@
   </aside>
 
   <main class="chat">
+    <div id="rag-status" role="status" hidden></div>
     <div id="messages"></div>
     <div id="img-preview"></div>
     <form id="composer">
@@ -535,6 +537,15 @@
         if (h.max_input_chars) MAX_INPUT = h.max_input_chars;
         if (h.max_images_per_message != null) MAX_IMAGES = h.max_images_per_message;
         if (h.max_image_bytes) MAX_IMAGE_BYTES = h.max_image_bytes;
+        const ragStatus = $('#rag-status');
+        if (h.rag && h.rag.state !== 'ready') {
+          ragStatus.textContent = h.rag.state === 'disabled'
+            ? '知识库检索已关闭，仍可正常聊天。'
+            : '知识库检索暂不可用，当前回答不会查询知识库。仍可正常聊天。';
+          ragStatus.hidden = false;
+        } else {
+          ragStatus.hidden = true;
+        }
       } catch (e) { /* 拿不到就不限制，服务端仍会挡 */ }
       applyInputLimit();
 

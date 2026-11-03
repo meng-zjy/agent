@@ -9,6 +9,7 @@
 
 import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 # 国内镜像 + 关闭 Xet 下载协议（必须在首次 import fastembed 之前生效）
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -30,9 +31,22 @@ class Embedder(ABC):
 class FastembedEmbedder(Embedder):
     """本地 BGE 中文模型（fastembed，ONNX 运行时）。"""
 
-    def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5") -> None:
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-small-zh-v1.5",
+        *,
+        cache_dir: str | None = None,
+        local_files_only: bool = False,
+    ) -> None:
         from fastembed import TextEmbedding  # 延迟导入：不装 fastembed 也能跑其它功能
-        self._model = TextEmbedding(model_name=model_name)
+
+        if cache_dir is not None:
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        self._model = TextEmbedding(
+            model_name=model_name,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+        )
 
     def embed(self, text: str) -> list[float]:
         return self.embed_many([text])[0]

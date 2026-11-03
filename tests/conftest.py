@@ -30,6 +30,9 @@ def _isolate_log_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "auth_cookie_secure", True)
     monkeypatch.setattr(settings, "knowledge_database", str(tmp_path / "knowledge.db"))
     monkeypatch.setattr(settings, "knowledge_dir", str(tmp_path / "knowledge"))
+    monkeypatch.setattr(settings, "rag_enabled", True)
+    monkeypatch.setattr(settings, "embedding_cache_dir", str(tmp_path / "models"))
+    monkeypatch.setattr(settings, "embedding_local_files_only", False)
     monkeypatch.setattr(settings, "log_dir", str(tmp_path / "logs"))
     yield
     logger_mod.reset()

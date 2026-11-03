@@ -114,6 +114,8 @@ class ChatService:
         time_zone: str = "Asia/Shanghai",
         busy_timeout: float = 30.0,
         housekeeping_timeout: float = 5.0,
+        retrieval_enabled: bool = True,
+        retrieval_available: bool = False,
     ) -> None:
         self._agent = agent
         self._memory = memory
@@ -133,6 +135,8 @@ class ChatService:
             raise ValueError(f"无效时区：{time_zone}") from exc
         self._busy_timeout = busy_timeout
         self._housekeeping_timeout = housekeeping_timeout
+        self._retrieval_enabled = retrieval_enabled
+        self._retrieval_available = retrieval_available
 
         # 防止「已摘要的内容又被 _trim 静默丢掉」：保留窗口不能比摘要窗口更短
         if max_turns < summary_keep_turns:
@@ -362,6 +366,17 @@ class ChatService:
         事件循环上调用它。
         """
         return self._agent.provider.breaker_state()
+
+    def retrieval_status(self) -> dict:
+        """只报告启动能力，不联网探测、不返回文档数量或内部错误。
+
+        ready 不表示用户拥有资料权限或库内已有文档，也不保证运行时每次检索成功。
+        """
+        if not self._retrieval_enabled:
+            return {"state": "disabled", "available": False}
+        if self._retrieval_available:
+            return {"state": "ready", "available": True}
+        return {"state": "unavailable", "available": False}
 
     def _send_locked(self, session_id: str, text: str,
                      images: list[str] | None,

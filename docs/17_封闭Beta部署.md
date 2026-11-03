@@ -301,3 +301,74 @@ docker compose logs --tail=100 agent
 可选配置 `KNOWLEDGE_DATABASE=/app/data/knowledge.db`；默认相对路径在镜像工作目录 `/app` 下也落在挂载的 `data/` 内。HTTPS 部署保留 `AUTH_COOKIE_SECURE=true`（程序默认 true），本地 HTTP 调试才设为 false。
 
 启动完成后，用最早账户登录，从侧栏“知识库”创建受限库、添加文档并授予测试用户访问。撤权不会清除历史回答。务必同时验证模型已加载；此前 HuggingFace 下载超时的问题不会因本次权限升级自动解决。
+
+## 11. RAG 运行状态与持久化模型缓存
+
+### 11.1 分开判断服务存活和检索能力
+
+`GET /health` 保留 `ok: true` 表示聊天服务已启动，并新增 `rag`：
+
+| `rag.state` | `rag.available` | 含义 |
+| --- | --- | --- |
+| `ready` | `true` | 启动时已加载检索器；仍需要用户有权访问且库内存在资料 |
+| `disabled` | `false` | 通过 `RAG_ENABLED=false` 主动关闭 |
+| `unavailable` | `false` | 未加载检索器，例如模型下载失败；查看应用启动日志 |
+
+聊天页会在关闭或不可用时提示当前回答不会查询知识库；知识库页面也会显示状态，但继续允许有权限的文档管理和预览。该状态是启动能力，不是逐请求检索成功率；不公开文档数量、内部路径或错误详情。
+
+保持 Docker 健康检查只判断进程 HTTP 服务，不因为模型下载失败反复重启容器。修复缓存或修改配置后须重建容器使状态更新：`docker compose up -d --force-recreate`。
+
+### 11.2 缓存放在挂载目录
+
+```dotenv
+RAG_ENABLED=true
+EMBEDDING_CACHE_DIR=/app/data/models
+EMBEDDING_LOCAL_FILES_ONLY=false
+```
+
+模型下载到挂载目录后，容器重建仍能复用。默认相对路径 `data/models` 在镜像 `/app` 工作目录下同样持久化；不要将缓存指到容器临时目录。新的缓存位置首次使用需要下载或拷入已有缓存，并不会自动从旧临时目录迁移模型。
+
+首次下载成功后可设 `EMBEDDING_LOCAL_FILES_ONLY=true`，启动时只读本地缓存。无缓存、缓存损坏或权限错误会降级为不带 RAG 的聊天，并显示 `unavailable`，不能认为开启离线模式就会自动获得模型。
+
+### 11.3 服务器无法下载时，从本机上传已验证缓存
+
+本机先确认 `data/models/` 含完整模型缓存。以下步骤留待真正部署时操作；不需要现在更新服务器。
+
+先在服务器停止应用，避免下载与拷贝并发：
+
+```bash
+cd ~/agent
+docker compose stop agent
+mkdir -p data/models
+```
+
+然后在**本机 PowerShell 的项目根目录**上传（两端需已连接同一 Tailscale）：
+
+```powershell
+scp -r .\data\models root@100.79.48.6:/root/agent/data/
+```
+
+回到**服务器终端**，为非 root 应用进程设置缓存目录权限：
+
+```bash
+cd ~/agent
+chown -R 10001:10001 data/models
+nano .env
+```
+
+确认 `RAG_ENABLED=true`、`EMBEDDING_CACHE_DIR=/app/data/models`、`EMBEDDING_LOCAL_FILES_ONLY=true`，保存后重新构建并检查：
+
+```bash
+docker compose up -d --build
+docker compose logs --tail=100 agent
+curl --fail http://127.0.0.1:8000/health
+```
+
+期望 `rag.state` 为 `ready`。最后用已授权用户实际提问，确认调用检索工具并基于文档回答。缓存目录和模型名必须匹配；上传缓存不改变资料访问权限。
+
+### 11.4 本地验证记录（2026-11-04）
+
+- 全量测试 `pytest -q --basetemp .pytest-tmp-rag-runtime`：`325 passed`，脚本语法检查通过。
+- 将本机旧临时目录里的完整 BGE 缓存复制到 `data/models/`，保留原缓存；使用 `local_files_only=True` 连续加载两次，均产生 512 维向量。
+- Playwright 驱动 Edge，分别启动真实应用验证 `ready`、`disabled`、空缓存离线导致的 `unavailable`；聊天和管理页均显示对应状态，三个状态下均可通过管理页面创建知识库，无浏览器脚本错误。
+- 测试数据独立且被 Git 忽略，测试应用进程已关闭；本轮未连接或更新服务器，线上下载与容器缓存复用需部署时再验收。

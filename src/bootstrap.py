@@ -63,6 +63,9 @@ def build_provider() -> BaseProvider:
 
 def build_retriever(knowledge_catalog=None):
     """构建知识库检索器；fastembed 缺失/模型下载失败时返回 None（降级为无 RAG）。"""
+    if not settings.rag_enabled:
+        get_logger("bootstrap").info("知识库检索已由 RAG_ENABLED=false 关闭")
+        return None
     try:
         from src.core.embeddings import FastembedEmbedder
         from src.core.rag import DocumentStore
@@ -70,7 +73,11 @@ def build_retriever(knowledge_catalog=None):
         # 账户模式下禁止意外退回全目录检索；CLI 无身份时不加载受限资料。
         if settings.account_enabled and knowledge_catalog is None:
             return None
-        embedder = FastembedEmbedder(model_name=settings.embedding_model)
+        embedder = FastembedEmbedder(
+            model_name=settings.embedding_model,
+            cache_dir=settings.embedding_cache_dir,
+            local_files_only=settings.embedding_local_files_only,
+        )
         if knowledge_catalog is not None:
             from src.core.knowledge import AuthorizedRetriever
 
@@ -180,4 +187,6 @@ def build_service(retriever=None) -> ChatService:
         time_zone=settings.time_zone,
         summary_keep_turns=settings.summary_keep_turns,
         summary_max_chars=settings.summary_max_chars,
+        retrieval_enabled=settings.rag_enabled,
+        retrieval_available=retriever is not None,
     )

@@ -99,7 +99,8 @@ AI：抱歉，我不知道你叫什么——这是一个新的会话。
 ## RAG 知识库说明（M4）
 
 - **文档检索**：往 `data/knowledge/` 放 `.txt`/`.md` 文档，启动时自动摄入；模型回答资料性问题时会自动调用 `search_knowledge_base` 工具检索相关片段，再基于文档回答
-- **本地向量化**：用 `fastembed` + BGE 中文模型（`bge-small-zh-v1.5`）做 embedding，完全离线免费
+- **本地向量化**：用 `fastembed` + BGE 中文模型（`bge-small-zh-v1.5`）做 embedding；首次下载后缓存在 `data/models/`，可用 `EMBEDDING_LOCAL_FILES_ONLY=true` 离线加载，无 embedding API 费用。
+- **检索状态可见**：`/health` 的 `rag.state` 及页面区分模型已加载、主动关闭与加载失败；模型失败时仍可聊天和管理文档。详见 [部署文档第 11 节](docs/17_封闭Beta部署.md)。
 - **首次下载**：首次运行会自动下载 BGE 模型（约 100MB），代码里已内置走 `hf-mirror.com` 镜像
 - **扩展预留**：检索被包装成一个工具接入 M3 的 ReAct 循环，`agent`/`service`/`provider` 一行没改
 

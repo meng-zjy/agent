@@ -285,6 +285,8 @@ def create_app(service: ChatService | None = None) -> FastAPI:
             # 熔断状态：上游挂了时这里会变 "open"，看监控的人一眼就能定位
             # 是「我们自己的服务」还是「上游」的问题
             "upstream": service.upstream_state(),
+            # 与进程存活分开报告；RAG 降级不能触发容器健康检查重启循环。
+            "rag": service.retrieval_status(),
         }
 
     @app.get("/api/sessions")

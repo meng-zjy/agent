@@ -81,11 +81,15 @@ class Settings(BaseSettings):
     summary_max_chars: int = 1500
 
     # 知识库 / RAG（M4）
+    rag_enabled: bool = True
     knowledge_dir: str = "data/knowledge"
     chunk_size: int = 400
     chunk_overlap: int = 50
     retrieval_top_k: int = 4
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    # 放进 data/ 挂载目录，避免容器重建后丢失模型。首次联网缓存后可切换离线模式。
+    embedding_cache_dir: str = "data/models"
+    embedding_local_files_only: bool = False
 
     # MCP（M5）
     # 本地学习时可开启；公网/多人环境应关闭，或替换为经过权限审计的专用工具。
